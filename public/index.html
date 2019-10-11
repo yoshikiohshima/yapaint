@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset='utf8'>
+	<meta name='viewport' content='width=device-width'>
+
+	<title>Paint</title>
+
+	<link rel='icon' type='image/png' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQAAAABbAUdZAAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7OHOkAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAAJiS0dEAAHdihOkAAAACXBIWXMAAABIAAAASABGyWs+AAAAjUlEQVQI10XOMQ7CMAwF0H+DHoEjMLJxFSR2JoaIqdykA8eowCNjD4CKxZShUlAHCCEkxqEDHp4s27IN0cCPKMJI3hPyMNSQzUXQ9H2AvR4twmnZQCjrcOsEVetuUzbVDmuFk3KPyngmSOIVJDqG+AeVhi6dv2vkbkdIdluuGcbHmBnCc9HhhX2F/0OFL49la7NW4AFGAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDE5LTA5LTI3VDE2OjAzOjUyLTA3OjAwYbipIQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAxOS0wOS0yN1QxNjowMzo1Mi0wNzowMBDlEZ0AAAAASUVORK5CYII='>
+</head>
+
+<body>
+  <div id="draw-content">
+    <div style="display: flex">
+      <button id="load">Load</button>
+      <textarea id="movieId">R81egpgDzbY</textarea>
+    </div>
+    <div style="display: flex">
+      <div id="compound" style="position: relative">
+	<div id="player" style="position: absolute"></div>
+	<canvas id="canvas" width=500 height=500 style="border: 1px solid black; position: absolute"></canvas>
+      </div>
+      <div id="backstop" style="width: 500px; height: 500px; border: 1px solid red"></div>
+      <div id="colors" style="display: flex; flex-direction: column">
+	<button id="clearButton">Clear</button>
+	<button id="black">Black</button>
+	<button id="blue">Blue</button>
+	<button id="red">Red</button>
+      </div>
+    </div>
+    <div style="display: flex">
+      <button id="goStop">Go</button>
+      <input id="time" type="range" min=0 max=20 step=0.01 style="width: 400px"></input>
+      <div id="readout" style="width: 40px">0</div>
+    </div> 
+  </div>
+  <script src='bundle.js'></script>
+</body>
+</html>
