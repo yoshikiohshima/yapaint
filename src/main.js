@@ -2,9 +2,12 @@
 
 import * as Croquet from '@croquet/croquet';
 
-let isLocal = true;
+import {Cache, Command, CommandArray, toKey} from './data.js';
+
+let isLocal = false;
 let session;
 
+const VIEW_EARLY_DRAW = true;
 
 class FutureHandler {
   constructor(tOffset) {
@@ -97,34 +100,10 @@ function makeMockReflector(modelClass, viewClass) {
   return mockReflector;
 }
 
-const VIEW_EARLY_DRAW = true;
-
-class Command {
-  constructor(type, info) {
-    // type: 'stroke','finishStroke', 'addBitmap', 'removeBitmap', 'reframeBitmap',
-    //   beginStroke: {start: {x: y}, end: {x, y}, color: string, width, userId} color == 'transparent': erase
-    //   stroke: {start: {x: y}, end: {x, y}, color: string, width, userId}
-    //   finishStroke: {start: {x: y}, end: {x, y}, color: string, width, userId}
-    //   addBitmap: {bitmapNameOrBitmap, x, y, id, userId}
-    //   removeBitmap: {id, userId}
-    //   reframeBitmap: {id, startx, starty, endx, endy, useerId}
-    this.type = type;
-    this.info = info;
-  }
-}
-
-let cache = new Map();
-
+let modelCanvas;
+let cache = new Cache();
 
 class Interface {
-  doCommand(canvas, command) {
-    if (command.type === 'stroke') {
-      this.newSegment(canvas, command.info);
-    } else if (command.type === 'clear') {
-      this.clear(canvas);
-    }
-  }
-
   newSegment(canvas, obj) {
     let {x0, y0, x1, y1, color} = obj;
     let ctx = canvas.getContext('2d');
@@ -143,57 +122,6 @@ class Interface {
     canvas.getContext('2d').putImageData(img, 0, 0);
   }
 
-  sliceCommandsBetween(commands, baseTime, now) {
-    let oneOff = commands.findIndex((c) => baseTime <= c.time);
-    let base;
-    let end;
-    if (oneOff < 0) {
-      base = commands.length;
-    } else if (oneOff === 0) {
-      base = 0;
-    } else {
-      base = oneOff - 1;
-    }
-
-    function findIndexLast(array, func) {
-      for (let i = array.length - 1; i >= 0; i--) {
-        let elem = array[i];
-        if (func(elem)) {
-          return i;
-        }
-      }
-      return -1;
-    }
-
-    if (now === 0) {
-      end = 0;
-    } else {
-      end = findIndexLast(commands, (c) => c.time < now);
-      if (end < 0) {
-        end = commands.length + 1;
-      } else {
-        end = end + 1;
-      }
-    }
-
-    return commands.slice(base, end);
-  }
-
-  findClosestBitmap(model, now) {
-    let arr = cache.get(model);
-    let prev;
-
-    for (let i = 0; i < arr.length; i++) {
-      prev = arr[i];
-      let next = arr[i + 1];
-
-      if (!next || prev.time <= now && now < next.time) {
-        break;
-      }
-    }
-    return prev;
-  }
-
   emptyImageData(width, height) {
     return new ImageData(width, height).data;
   }
@@ -202,9 +130,6 @@ class Interface {
 class DrawingModel extends M {
   // commands: [{time, command: Command}];
   // redoCommands; [{time, command: Command}];
-
-  // lastPoints: {[id:string]: PointData};
-  // colors: {[id:string]: Color};
 
   static types() {
     return {
@@ -217,14 +142,25 @@ class DrawingModel extends M {
         read: (obj) => {
           return new Command(obj.type, obj.info);
         }
+      },
+      CommandArray: {
+        cls: CommandArray,
+        write: (c) => {
+          let {keys, data} = c;
+          return {keys, data};
+        },
+        read: (obj) => {
+          let c = new CommandArray();
+          c.keys = obj.keys;
+          c.data = obj.data;
+          return c;
+        }
       }
     }
   }
 
   init() {
-    this.lastPoints = {};
-    this.colors = {};
-    this.commands = [];
+    this.commands = new CommandArray();
     this.redoCommands = [];
     this.now = 0;
     this.playing = false;
@@ -251,6 +187,8 @@ class DrawingModel extends M {
 
     this.subscribe(this.id, "message", this.dispatch);
 
+    window.model = this;
+
     this.future(50).tick();
   }
 
@@ -267,104 +205,57 @@ class DrawingModel extends M {
     }
   }
 
-  addCommand(type, info, now) {
-    let closest = new Interface().findClosestBitmap(this, now);
-    let arr = cache.get(this);
-    if (!closest || now - closest.time > 1 /* seconds */) {
-      arr.push({time: now, state: this.canvas.getContext('2d').getImageData(0, 0, this.canvas.width, this.canvas.height).data});
-      arr.sort((a, b) => a.time - b.time);
-    }
-    this.commands.push({time: now, command: new Command(type, info)});
-    this.commands.sort((a, b) => a.time - b.time);
+  addCommand(userId, type, info) {
+    this.commands.add(this.now, userId, new Command(type, info));
   }
 
   viewJoin(viewId) {
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = 500;
-    this.canvas.height = 500;
-    cache.set(this, [
-      {
-        time: 0,
-        state: new Interface().emptyImageData(this.canvas.width, this.canvas.height),
-      }
-    ]);
-    console.log('canvas created');
-    this.color({viewId: viewId, color: '#000'});
+    if (!modelCanvas) {
+      modelCanvas = document.createElement('canvas');
+      modelCanvas.width = 500;
+      modelCanvas.height = 500;
+    }
+
+    if (!cache) {
+      cache = new Cache();
+    }
+    cache.resetFor(modelCanvas);
   }
 
   viewExit(viewId) {
     console.log("view exit " + viewId);
-    delete this.lastPoints[viewId];
-    delete this.colors[viewId];
-  }
-
-  color(obj) {
-    this.colors[obj.userId] = obj.color;
   }
 
   beginStroke(obj) {
-    this.lastPoints[obj.userId] = {x: obj.x, y: obj.y};
-    let info = {color: this.colors[obj.userId] || 'black', ...obj};
-    this.addCommand('beginStroke', obj, this.now);
+    this.addCommand(obj.userId, 'beginStroke', obj);
     return obj;
   }
 
   stroke(obj) {
-    let {userId, x0, y0, x1, y1, color} = obj;
-    let old = this.lastPoints[userId];
-    this.lastPoints[userId] = {x1, y1};
-    new Interface().newSegment(this.canvas, obj);
-    this.addCommand('stroke', obj, this.now);
+    let {userId, x1, y1} = obj;
+    new Interface().newSegment(modelCanvas, obj);
+    this.addCommand(userId, 'stroke', obj);
     return Object.assign({message: 'stroke'}, obj);
   }
 
   finishStroke(obj) {
     let {userId, x, y} = obj;
-    /* 
-    let old = this.lastPoints[userId];
-    let color = this.colors[userId];
-
-    this.lastPoints[userId] = {x, y};
-
-    let result = {
-      userId,
-      x0: old.x,
-      y0: old.y,
-      x1: x,
-      y1: y,
-      color
-    };
-    this.lastPoints[userId] = {x, y};
-    */
-    
-    this.lastPoints[obj.userId] = null;
-    this.addCommand('finishStroke', obj, this.now);
+    this.addCommand(userId, 'finishStroke', obj);
     return Object.assign({message: 'finishStroke'}, obj);
   }
 
   clear(obj) {
-    new Interface().clear(this.canvas);
-    this.addCommand('clear', {}, this.now);
-    return obj;
-  }
-
-  setColor(obj) {
-    this.colors[obj.userId] = obj;
+    new Interface().clear(modelCanvas);
+    this.addCommand(obj.userId, 'clear', {});
     return obj;
   }
 
   clock(obj) {
+    if (this.now !== obj.time) {
+      this.commands.leave(this.now, modelCanvas, cache);
+    }
     this.now = obj.time;
-    let intf = new Interface();
-    let closest = intf.findClosestBitmap(this, this.now);
-    if (!closest) {return;}
-    let commands = intf.sliceCommandsBetween(this.commands, closest.time, this.now);
-
-    this.canvas.getContext('2d').putImageData(new ImageData(closest.state, this.canvas.width, this.canvas.height), 0, 0);
-
-    commands.forEach((c) => {
-      intf.doCommand(this.canvas, c.command);
-    });
+    this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
     return obj;
   }
 
@@ -378,7 +269,7 @@ class DrawingModel extends M {
 
   toggleGoStop(obj) {
     this.playing = !this.playing;
-    if (!this.player) {return;}
+    if (!this.player) {return obj;}
 
     if (this.playing) {
       this.player.playVideo();
@@ -439,15 +330,11 @@ class DrawingModel extends M {
 
   configure(obj) {
     let {width, height} = obj;
-    this.canvas.width = width;
-    this.canvas.height = height;
-    cache.set(this, [
-      {
-        time: 0,
-        state: new Interface().emptyImageData(this.canvas.width, this.canvas.height),
-      }
-    ]);
-    this.commands = [];
+    modelCanvas.width = width;
+    modelCanvas.height = height;
+
+    cache.resetFor(modelCanvas);
+    this.commands = new CommandArray();
     return obj;
   }
 
@@ -474,15 +361,16 @@ class DrawingView extends V {
     this.model = model;
     this.modelId = model.id;
     this.lastPoint = null;
+    this.color = 'black';
 
     this.messages = {
       'mouseDown': 'mouseDown',
       'mouseMove': 'mouseMove',
       'mouseUp': 'mouseUp',
+      'stroke': 'stroke',
       'clearPressed': 'clearPressed',
       'goStopPressed': 'goStopPressed',
       'loadPressed': 'loadPressed',
-      'colorSelected': 'colorSelected',
       'timeChanged': 'timeChanged',
       'clock': 'clock',
       'clear': 'clear',
@@ -519,7 +407,7 @@ class DrawingView extends V {
       {message: 'mouseUp'}, this.cookEvent(evt)));
     this.clearHandler = (evt) => this.dispatch({message: 'clearPressed'})
 
-    this.colorHandler = (evt) => this.dispatch({message: 'colorSelected', color: evt.target.id});
+    this.colorHandler = (evt) => this.setColor(evt.target.id);
     
     this.timeHandler = (evt) => this.dispatch({message: 'timeChanged', time: this.time.valueAsNumber});
     this.goStopHandler = (evt) => this.dispatch({message: 'goStopPressed'});
@@ -578,21 +466,21 @@ class DrawingView extends V {
 
   mouseDown(evt) {
     this.lastPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
-    return Object.assign({message: 'beginStroke'}, this.lastPoint);
+    return Object.assign({message: 'beginStroke', color: this.color}, this.lastPoint);
   }
 
   mouseMove(evt) {
     if (this.lastPoint !== null) {
       let newPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
       if (this.lastPoint.x === newPoint.x && this.lastPoint.y === newPoint.y) {return undefined;}
-      let color = this.model.colors[this.viewId];
+      let color = this.color;
       let stroke = {
         message: 'stroke',
         x0: this.lastPoint.x, y0: this.lastPoint.y,
         x1: newPoint.x, y1: newPoint.y, color
       };
       if (VIEW_EARLY_DRAW) {
-        this.newSegment(Object.assign({userId: '___'}, stroke));
+        this.stroke(Object.assign({userId: '___'}, stroke));
       }
       this.lastPoint = newPoint;
       return Object.assign({userId: this.viewId}, stroke);
@@ -602,10 +490,10 @@ class DrawingView extends V {
 
   mouseUp(evt) {
     this.lastPoint = null;
-    return {message: 'finishStroke', userId: this.viewid, x: evt.offsetX, y: evt.offsetY};
+    return {message: 'finishStroke', userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
   }
 
-  newSegment(obj) {
+  stroke(obj) {
     if (VIEW_EARLY_DRAW && obj.userId === this.viewId) {return;}
     new Interface().newSegment(this.canvas, obj);
   }
@@ -614,8 +502,8 @@ class DrawingView extends V {
     return {message: 'toggleGoStop'};
   }
 
-  colorSelected(arg) {
-    return {message: 'color', userId: this.viewId, color: arg.color};
+  setColor(name) {
+    this.color = name;
   }
 
   loadPressed(arg) {
@@ -635,16 +523,8 @@ class DrawingView extends V {
   }
 
   clock(obj) {
-    let intf = new Interface();
-    let closest = intf.findClosestBitmap(this.model, this.model.now);
-    if (!closest) {return;}
-    let commands = intf.sliceCommandsBetween(this.model.commands, closest.time, this.model.now);
-
-    this.canvas.getContext('2d').putImageData(new ImageData(closest.state, this.canvas.width, this.canvas.height), 0, 0);
-
-    commands.forEach((c) => {
-      intf.doCommand(this.canvas, c.command);
-    });
+    new Interface().clear(this.canvas);
+    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
 
     this.time.valueAsNumber = this.model.now;
     this.readout.textContent = this.model.now.toFixed(2);
