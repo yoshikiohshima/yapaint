@@ -14,7 +14,7 @@
 <body>
   <div id="draw-content">
     <div style="display: flex">
-      <button id="load">Load</button>
+      <button id="loadButton">Load</button>
       <textarea id="movieId">R81egpgDzbY</textarea>
     </div>
     <div style="display: flex">
@@ -27,13 +27,14 @@
 	<button id="black" class="color-dot grow" style="background-color: black"/>
 	<button id="blue" class="color-dot grow" style="background-color: blue"/>
 	<button id="red" class="color-dot grow" style="background-color: red"/>
+	<button title="eraser" id="eraser" class="color-dot eraser grow"></button>
 	<button title="undo" id="undoButton" class="color-dot undo grow"></button>
 	<button title="redo" id="redoButton" class="color-dot redo grow"></button>
 	<button title="clear" id="clearButton" class="color-dot trash grow"></button>
       </div>
     </div>
     <div style="display: flex">
-      <button id="goStop">Go</button>
+      <button id="goStop" class="goStop">Go</button>
       <input id="time" type="range" min=0 max=20 step=0.01 style="width: 400px"></input>
       <div id="readout" style="width: 40px">0</div>
     </div> 

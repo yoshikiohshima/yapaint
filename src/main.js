@@ -4,7 +4,7 @@ import * as Croquet from '@croquet/croquet';
 
 import {Cache, Command, CommandArray, toKey} from './data.js';
 
-let isLocal = false;
+let isLocal = true;
 let session;
 
 const VIEW_EARLY_DRAW = true;
@@ -101,7 +101,30 @@ function makeMockReflector(modelClass, viewClass) {
 }
 
 let modelCanvas;
-let cache = new Cache();
+function ensureModelCanvas() {
+  if (!modelCanvas) {
+    modelCanvas = document.createElement('canvas');
+    modelCanvas.width = 500;
+    modelCanvas.height = 500;
+  }
+  return modelCanvas;
+}
+
+let cache;
+function ensureCache() {
+  if (!cache) {
+    cache = new Cache();
+  }
+  return cache;
+}
+
+function newId() {
+  function hex() {
+    let r = Math.random();
+    return Math.floor(r * 256).toString(16).padStart(2, "0");
+  }
+  return`${hex()}${hex()}${hex()}${hex()}`;
+}
 
 class Interface {
   newSegment(canvas, obj) {
@@ -109,7 +132,8 @@ class Interface {
     let ctx = canvas.getContext('2d');
 
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    
+    ctx.lineWidth = color === 'white' ? 4 : 2;
 
     ctx.beginPath();
     ctx.moveTo(x0, y0);
@@ -128,9 +152,6 @@ class Interface {
 }
 
 class DrawingModel extends M {
-  // commands: [{time, command: Command}];
-  // redoCommands; [{time, command: Command}];
-
   static types() {
     return {
       Command: {
@@ -174,6 +195,8 @@ class DrawingModel extends M {
       'removeBitmap': 'removeBitmap',
       'color': 'color',
       'clear': 'clear',
+      'undo': 'undo',
+      'redo': 'redo',
       // ---
       'load': 'load',
       'clock': 'clock',
@@ -210,15 +233,8 @@ class DrawingModel extends M {
   }
 
   viewJoin(viewId) {
-    if (!modelCanvas) {
-      modelCanvas = document.createElement('canvas');
-      modelCanvas.width = 500;
-      modelCanvas.height = 500;
-    }
-
-    if (!cache) {
-      cache = new Cache();
-    }
+    ensureModelCanvas();
+    ensureCache();
     cache.resetFor(modelCanvas);
   }
 
@@ -232,6 +248,7 @@ class DrawingModel extends M {
   }
 
   stroke(obj) {
+    ensureModelCanvas();
     let {userId, x1, y1} = obj;
     new Interface().newSegment(modelCanvas, obj);
     this.addCommand(userId, 'stroke', obj);
@@ -245,9 +262,32 @@ class DrawingModel extends M {
   }
 
   clear(obj) {
+    ensureModelCanvas();
     new Interface().clear(modelCanvas);
     this.addCommand(obj.userId, 'clear', {});
     return obj;
+  }
+
+  undo(obj) {
+    if (this.commands.getCommandCount() === 0) {return undefined;}
+    let actions = this.commands.undo(this.now);
+    this.redoCommands.unshift(actions);
+
+    this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
+    
+    return obj;
+  }
+
+  redo(obj) {
+    let actions = this.redoCommands.shift();
+    if (actions) {
+      actions.forEach((c) => {
+        this.commands.add(this.now, c.userId, c.command);
+      });
+      this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
+      return obj;
+    }
+    return undefined;
   }
 
   clock(obj) {
@@ -255,6 +295,9 @@ class DrawingModel extends M {
       this.commands.leave(this.now, modelCanvas, cache);
     }
     this.now = obj.time;
+    if (!cache) {
+      cache = new Cache();
+    }
     this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
     return obj;
   }
@@ -345,7 +388,7 @@ class DrawingModel extends M {
     }
 
     this.now += 0.05;
-    if (this.now > 20) {
+    if (this.now >= 20) {
       this.now = 20;
       this.playing = false;
     }
@@ -368,12 +411,17 @@ class DrawingView extends V {
       'mouseMove': 'mouseMove',
       'mouseUp': 'mouseUp',
       'stroke': 'stroke',
+      'finishStroke': 'finishStroke',
       'clearPressed': 'clearPressed',
       'goStopPressed': 'goStopPressed',
       'loadPressed': 'loadPressed',
       'timeChanged': 'timeChanged',
+      'undoPressed': 'undoPressed',
+      'redoPressed': 'redoPressed',
       'clock': 'clock',
       'clear': 'clear',
+      'undo': 'undo',
+      'redo': 'redo',
       'toggleGoStop': 'toggleGoStop',
       'load': 'load',
       'configure': 'configure',
@@ -382,66 +430,59 @@ class DrawingView extends V {
     this.subscribe(this.modelId, "message-m", this.dispatch);
 
     this.content = document.querySelector("#draw-content");
-    this.canvas = this.content.querySelector("#canvas");
 
-    this.loadButton = this.content.querySelector("#load");
-    this.movieId = this.content.querySelector("#movieId");
+    this.handlers = {
+      mousedown: (evt) => this.dispatch(Object.assign(
+        {message: 'mouseDown'}, this.cookEvent(evt))),
+      mousemove: (evt) => this.dispatch(Object.assign(
+        {message: 'mouseMove'}, this.cookEvent(evt))),
+      mouseup: (evt) => this.dispatch(Object.assign(
+        {message: 'mouseUp'}, this.cookEvent(evt))),
+      clearHandler: (evt) => this.dispatch({message: 'clearPressed'}),
+      colorHandler: (evt) => this.setColor(evt.target.id),
+      timeHandler: (evt) => this.dispatch(
+        {message: 'timeChanged', time: this.elements.time.valueAsNumber}),
+      goStopHandler: (evt) => this.dispatch({message: 'goStopPressed'}),
+      loadHandler: (evt) => this.dispatch({message: 'loadPressed'}),
+      undoHandler: (evt) => this.dispatch({message: 'undoPressed'}),
+      redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
+    };
 
-    this.clearButton = this.content.querySelector("#clearButton");
-    this.black = this.content.querySelector("#black");
-    this.blue = this.content.querySelector("#blue");
-    this.red = this.content.querySelector("#red");
+    this.elements = {};
+    ['canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop'].forEach((n) => this.elements[n] = this.content.querySelector('#' +  n));
 
-    this.time = this.content.querySelector("#time");
-    this.time.valueAsNumber = 0;
-    this.goStop = this.content.querySelector("#goStop");
-    this.readout = this.content.querySelector("#readout");
-    this.backstop = this.content.querySelector("#backstop");
+    this.handlerMap = [
+      ['canvas', 'mousedown', 'mousedown'],
+      ['canvas', 'mousemove', 'mousemove'],
+      ['canvas', 'mouseup', 'mouseup'],
+      ['clearButton', 'click', 'clearHandler'],
+      ['black', 'click', 'colorHandler'],
+      ['blue', 'click', 'colorHandler'],
+      ['red', 'click', 'colorHandler'],
+      ['eraser', 'click', 'colorHandler'],
+      ['time', 'change', 'timeHandler'],
+      ['time', 'input', 'timeHandler'],
+      ['goStop', 'click', 'goStopHandler'],
+      ['undoButton', 'click', 'undoHandler'],
+      ['redoButton', 'click', 'redoHandler'],
+      ['loadButton', 'click', 'loadHandler'],
+    ];
 
-    this.mousedown = (evt) => this.dispatch(Object.assign(
-      {message: 'mouseDown'}, this.cookEvent(evt)));
-    
-    this.mousemove = (evt) => this.dispatch(Object.assign(
-      {message: 'mouseMove'}, this.cookEvent(evt)));
-    this.mouseup = (evt) => this.dispatch(Object.assign(
-      {message: 'mouseUp'}, this.cookEvent(evt)));
-    this.clearHandler = (evt) => this.dispatch({message: 'clearPressed'})
+    this.handlerMap.forEach((triple) => {
+      this.elements[triple[0]].addEventListener(triple[1], this.handlers[triple[2]]);
+    });
 
-    this.colorHandler = (evt) => this.setColor(evt.target.id);
-    
-    this.timeHandler = (evt) => this.dispatch({message: 'timeChanged', time: this.time.valueAsNumber});
-    this.goStopHandler = (evt) => this.dispatch({message: 'goStopPressed'});
-    this.loadHandler = (evt) => this.dispatch({message: 'loadPressed'});
+    this.canvas = this.elements.canvas;
+    this.elements.time.valueAsNumber = 0;
 
-    this.canvas.addEventListener("mousedown", this.mousedown);
-    this.canvas.addEventListener("mousemove", this.mousemove);
-    this.canvas.addEventListener("mouseup", this.mouseup);
-    this.clearButton.addEventListener("click", this.clearHandler);
-
-    this.black.addEventListener("click", this.colorHandler);
-    this.blue.addEventListener("click", this.colorHandler);
-    this.red.addEventListener("click", this.colorHandler);
-    
-    this.time.addEventListener("change", this.timeHandler);
-    this.time.addEventListener("input", this.timeHandler);
-    this.goStop.addEventListener("click", this.goStopHandler);
-    this.loadButton.addEventListener("click", this.loadHandler);
+    this.elements.undoButton.classList.add('disabled');
+    this.elements.redoButton.classList.add('disabled');
   }
 
   detach() {
-    this.canvas.removeEventListener("mousedown", this.mousedown);
-    this.canvas.removeEventListener("mousemove", this.mousemove);
-    this.canvas.removeEventListener("mouseup", this.mouseup);
-    this.clearButton.removeEventListener("click", this.clearEvent);
-
-    this.black.removeEventListener("click", this.colorHandler);
-    this.blue.removeEventListener("click", this.colorHandler);
-    this.red.removeEventListener("click", this.colorHandler);
-
-    this.time.removeEventListener("change", this.timeHandler);
-    this.time.removeEventListener("input", this.timeHandler);
-    this.goStop.removeEventListener("click", this.goStopHandler);
-    this.loadButton.removeEventListener("click", this.loadHandler);
+    this.handlerMap.forEach((triple) => {
+      this.elements[triple[0]].removeEventListener(triple[1], this.handlers[triple[2]]);
+    });
   }
 
   cookEvent(evt) {
@@ -466,7 +507,8 @@ class DrawingView extends V {
 
   mouseDown(evt) {
     this.lastPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
-    return Object.assign({message: 'beginStroke', color: this.color}, this.lastPoint);
+    this.strokeId = newId();
+    return Object.assign({message: 'beginStroke', color: this.color, strokeId: this.strokeId}, this.lastPoint);
   }
 
   mouseMove(evt) {
@@ -483,14 +525,16 @@ class DrawingView extends V {
         this.stroke(Object.assign({userId: '___'}, stroke));
       }
       this.lastPoint = newPoint;
-      return Object.assign({userId: this.viewId}, stroke);
+      return Object.assign({userId: this.viewId, strokeId: this.strokeId}, stroke);
     }
     return undefined;
   }
 
   mouseUp(evt) {
     this.lastPoint = null;
-    return {message: 'finishStroke', userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
+    let strokeId = this.strokeId;
+    this.strokeId = null;
+    return {message: 'finishStroke', userId: this.viewId, strokeId: strokeId, x: evt.offsetX, y: evt.offsetY};
   }
 
   stroke(obj) {
@@ -498,12 +542,16 @@ class DrawingView extends V {
     new Interface().newSegment(this.canvas, obj);
   }
 
+  finishStroke(obj) {
+    this.updateButtons();
+  }
+
   goStopPressed(arg) {
     return {message: 'toggleGoStop'};
   }
 
   setColor(name) {
-    this.color = name;
+    this.color = name === 'eraser' ? 'white' : name;
   }
 
   loadPressed(arg) {
@@ -512,6 +560,14 @@ class DrawingView extends V {
 
   clearPressed(arg) {
     return {message: 'clear'};
+  }
+
+  undoPressed(arg) {
+    return {message: 'undo'};
+  }
+
+  redoPressed(arg) {
+    return {message: 'redo'};
   }
 
   clear() {
@@ -523,29 +579,53 @@ class DrawingView extends V {
   }
 
   clock(obj) {
-    new Interface().clear(this.canvas);
+    this.clear();
     this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
 
-    this.time.valueAsNumber = this.model.now;
-    this.readout.textContent = this.model.now.toFixed(2);
+    this.elements.time.valueAsNumber = this.model.now;
+    this.elements.readout.textContent = this.model.now.toFixed(2);
+    this.toggleGoStop();
+    this.updateButtons();
   }
 
   toggleGoStop() {
-    this.goStop.textContent = this.model.playing ? "Stop" : "Go";
+    this.elements.goStop.textContent = this.model.playing ? "Stop" : "Go";
   }
 
   configure(obj) {
     let {width, height, length} = obj;
     this.canvas.width = width;
     this.canvas.height = height;
-    this.time.max = length;
+    this.elements.time.max = length;
 
-    this.backstop.style.setProperty("width", width + "px");
-    this.backstop.style.setProperty("height", height + "px");
+    this.elements.backstop.style.setProperty("width", width + "px");
+    this.elements.backstop.style.setProperty("height", height + "px");
   }
 
-  clear(obj) {
-    new Interface().clear(this.canvas);
+  undo(obj) {
+    this.clear();
+    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
+    this.updateButtons();
+  }
+
+  redo(obj) {
+    this.clear();
+    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
+    this.updateButtons();
+  }
+
+  updateButtons() {
+    if (this.model.commands.getCommandCount() > 0) {
+      this.elements.undoButton.classList.remove('disabled');
+    } else {
+      this.elements.undoButton.classList.add('disabled');
+    }
+    
+    if (this.model.redoCommands.length > 0) {
+      this.elements.redoButton.classList.remove('disabled');
+    } else {
+      this.elements.redoButton.classList.add('disabled');
+    }
   }
 
   update() {}

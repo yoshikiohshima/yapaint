@@ -79,6 +79,11 @@ export class CommandArray {
     this.threshold = threshold || 128; // 1024
     this.uncachedCount = 0;
     this.willCacheWhenLeave = null;
+    this.commandCount = 0;
+  }
+
+  getCommandCount() {
+    return this.commandCount;
   }
 
   applyCommandsTo(canvas, toTime, cache, intf) {
@@ -120,6 +125,7 @@ export class CommandArray {
     array.push({command: command, userId: userId});
 
     this.uncachedCount++;
+    this.commandCount++;
     if (this.uncachedCount > this.threshold) {
       this.willCacheWhenLeave = timeKey;
       this.uncachedCount = 0;
@@ -144,28 +150,28 @@ export class CommandArray {
     }
   }
       
-  findIndexFor(timeStr, low, high) { // low is inclusive high is exclusive
+  findIndexFor(timeKey, low, high) { // low is inclusive high is exclusive
     if (high === low) {
       return [low, true];
     }
 
     if (high - 1 === low) {
-      if (timeStr < this.keys[low]) {
+      if (timeKey < this.keys[low]) {
         return [low, true];
       }
-      if (timeStr === this.keys[low]) {
+      if (timeKey === this.keys[low]) {
         return [low, false];
       }
       return [low + 1, true];
     }
 
     let mid = Math.floor((high + low) / 2);
-    if (timeStr < this.keys[mid]) {
-      return this.findIndexFor(timeStr, low, mid);
-    } else if (timeStr === this.keys[mid]) {
+    if (timeKey < this.keys[mid]) {
+      return this.findIndexFor(timeKey, low, mid);
+    } else if (timeKey === this.keys[mid]) {
       return [mid, false];
     } else {
-      return this.findIndexFor(timeStr, mid, high);
+      return this.findIndexFor(timeKey, mid, high);
     }
   }
 
@@ -176,5 +182,71 @@ export class CommandArray {
 
   keyAt(ind) {
     return this.keys[ind];
+  }
+
+  findLastUndoable(ind) {
+    for (let k = ind; k >= 0; k--) {
+      let array = this.data.get(this.keys[k]);
+      for (let i = array.length - 1; i >= 0; i--) {
+        let c = array[i];
+        if (c.command.type === 'finishStroke' || c.command.type === 'clear') {
+          return [k, i, c];
+        }
+      }
+    }
+    return [null, null, null];
+  }
+
+  getUndo(timeInd, arrayInd, command) {
+    if (command.command.type === 'clear') {
+      let array = this.data.get(this.keys[timeInd]);
+      array.splice(arrayInd, 1);
+      this.commandCount--;
+      return [command];
+    }
+    if (command.command.type === 'finishStroke') {
+      let strokeId = command.command.info.strokeId;
+      let result = this.moveStrokeInto(timeInd, arrayInd, strokeId);
+      result.push(command);
+      this.commandCount -= result.length;
+      return result;
+    }
+  }
+
+  moveStrokeInto(timeInd, arrayInd, strokeId) {
+    let result = [];
+    for (let k = timeInd; k >= 0; k--) {
+      let array = this.data.get(this.keys[k]);
+      array.splice(arrayInd, 1);
+      let [undoArray, newArray] = this.splitArray(array, (c) => (c.command.type === 'stroke' || c.command.type === 'beginStroke') && c.command.info.strokeId === strokeId);
+      result = [...undoArray, ...result];
+      this.data.set(this.keys[k], newArray);
+      if (undoArray.findIndex((c) => c.command.type === 'beginStroke') >= 0) {
+        break;
+      }
+    }
+    return result;
+  }
+
+  splitArray(array, func) {
+    let t = [];
+    let f = [];
+    for (let i = 0; i < array.length; i++) {
+      let elem = array[i];
+      if (func(elem)) {
+        t.push(elem);
+      } else {
+        f.push(elem);
+      }
+    }
+    return [t, f];
+  }
+
+  undo(time) {
+    let timeKey = toKey(time);
+    let ind = this.findClosestIndex(timeKey);
+    let [timeInd, arrayInd, command] = this.findLastUndoable(ind);
+    if (!command) {return null;}
+    return this.getUndo(timeInd, arrayInd, command);
   }
 }
