@@ -4,7 +4,7 @@ import * as Croquet from '@croquet/croquet';
 
 import {Cache, Command, CommandArray, toKey} from './data.js';
 
-let isLocal = true;
+let isLocal = false;
 let session;
 
 const VIEW_EARLY_DRAW = true;
@@ -13,15 +13,15 @@ class FutureHandler {
   constructor(tOffset) {
     this.tOffset = tOffset || 0;
   }
-    
+
   setup(target) {
-    let that = this;
+    let tOffset = this.tOffset
     return new Proxy(target, {
       get(_target, property) {
         if (typeof target[property] === "function") {
           return new Proxy(target[property], {
             apply(method, _this, args) {
-              setTimeout(() => method.apply(target, args), that.tOffset);
+              setTimeout(() => method.apply(target, args), tOffset);
             }
           });
         }
@@ -31,12 +31,12 @@ class FutureHandler {
 }
 
 class MockModel {
+  static create() {return new this();}
+  static register() {}
+
   constructor() {
     this.id = 'abc';
   }
-  static create() {return new this();}
-  static register() {}
-  
   init() {}
   subscribe() {}
   publish(id, message, data) {
@@ -98,24 +98,6 @@ function makeMockReflector(modelClass, viewClass) {
   mockReflector.frame.bind(mockReflector)();
 
   return mockReflector;
-}
-
-let modelCanvas;
-function ensureModelCanvas() {
-  if (!modelCanvas) {
-    modelCanvas = document.createElement('canvas');
-    modelCanvas.width = 500;
-    modelCanvas.height = 500;
-  }
-  return modelCanvas;
-}
-
-let cache;
-function ensureCache() {
-  if (!cache) {
-    cache = new Cache();
-  }
-  return cache;
 }
 
 function newId() {
@@ -185,6 +167,7 @@ class DrawingModel extends M {
     this.redoCommands = [];
     this.now = 0;
     this.playing = false;
+    this.canvasExtent = {width: 500, height: 500};
 
     this.messages = {
       'beginStroke': 'beginStroke',
@@ -233,9 +216,6 @@ class DrawingModel extends M {
   }
 
   viewJoin(viewId) {
-    ensureModelCanvas();
-    ensureCache();
-    cache.resetFor(modelCanvas);
   }
 
   viewExit(viewId) {
@@ -248,9 +228,7 @@ class DrawingModel extends M {
   }
 
   stroke(obj) {
-    ensureModelCanvas();
     let {userId, x1, y1} = obj;
-    new Interface().newSegment(modelCanvas, obj);
     this.addCommand(userId, 'stroke', obj);
     return Object.assign({message: 'stroke'}, obj);
   }
@@ -262,8 +240,6 @@ class DrawingModel extends M {
   }
 
   clear(obj) {
-    ensureModelCanvas();
-    new Interface().clear(modelCanvas);
     this.addCommand(obj.userId, 'clear', {});
     return obj;
   }
@@ -273,8 +249,6 @@ class DrawingModel extends M {
     let actions = this.commands.undo(this.now);
     this.redoCommands.unshift(actions);
 
-    this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
-    
     return obj;
   }
 
@@ -284,7 +258,6 @@ class DrawingModel extends M {
       actions.forEach((c) => {
         this.commands.add(this.now, c.userId, c.command);
       });
-      this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
       return obj;
     }
     return undefined;
@@ -292,14 +265,10 @@ class DrawingModel extends M {
 
   clock(obj) {
     if (this.now !== obj.time) {
-      this.commands.leave(this.now, modelCanvas, cache);
+      this.now = obj.time;
+      return obj;
     }
-    this.now = obj.time;
-    if (!cache) {
-      cache = new Cache();
-    }
-    this.commands.applyCommandsTo(modelCanvas, this.now, cache, new Interface());
-    return obj;
+    return undefined;
   }
 
   seek(obj) {
@@ -373,10 +342,9 @@ class DrawingModel extends M {
 
   configure(obj) {
     let {width, height} = obj;
-    modelCanvas.width = width;
-    modelCanvas.height = height;
+    this.canvasExtent = {width, height};
 
-    cache.resetFor(modelCanvas);
+    //cache.resetFor(modelCanvas);
     this.commands = new CommandArray();
     return obj;
   }
@@ -387,12 +355,12 @@ class DrawingModel extends M {
       return;
     }
 
-    this.now += 0.05;
-    if (this.now >= 20) {
-      this.now = 20;
+    let newTime = this.now + 0.05;
+    if (newTime >= 20) {
+      newTime = 20;
       this.playing = false;
     }
-    this.dispatch({message: 'clock', time: this.now});
+    this.dispatch({message: 'clock', time: newTime});
   }
 }
 
@@ -405,6 +373,9 @@ class DrawingView extends V {
     this.modelId = model.id;
     this.lastPoint = null;
     this.color = 'black';
+
+    this.cache = new Cache();
+    this.cache.resetFor(this.model.canvasExtent);
 
     this.messages = {
       'mouseDown': 'mouseDown',
@@ -522,7 +493,7 @@ class DrawingView extends V {
         x1: newPoint.x, y1: newPoint.y, color
       };
       if (VIEW_EARLY_DRAW) {
-        this.stroke(Object.assign({userId: '___'}, stroke));
+        new Interface().newSegment(this.canvas, stroke);
       }
       this.lastPoint = newPoint;
       return Object.assign({userId: this.viewId, strokeId: this.strokeId}, stroke);
@@ -539,7 +510,7 @@ class DrawingView extends V {
 
   stroke(obj) {
     if (VIEW_EARLY_DRAW && obj.userId === this.viewId) {return;}
-    new Interface().newSegment(this.canvas, obj);
+    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, new Interface());
   }
 
   finishStroke(obj) {
@@ -571,7 +542,7 @@ class DrawingView extends V {
   }
 
   clear() {
-    new Interface().clear(this.canvas);
+    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, new Interface());
   }
 
   timeChanged(arg) {
@@ -579,8 +550,10 @@ class DrawingView extends V {
   }
 
   clock(obj) {
-    this.clear();
-    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
+    // this method is called only when the model got a new clock
+    this.model.commands.leave(this.model.now, this.canvas, this.cache);
+    
+    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, new Interface());
 
     this.elements.time.valueAsNumber = this.model.now;
     this.elements.readout.textContent = this.model.now.toFixed(2);
@@ -600,17 +573,19 @@ class DrawingView extends V {
 
     this.elements.backstop.style.setProperty("width", width + "px");
     this.elements.backstop.style.setProperty("height", height + "px");
+
+    this.cache.resetFor(this.canvas);
   }
 
   undo(obj) {
     this.clear();
-    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
+    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, new Interface());
     this.updateButtons();
   }
 
   redo(obj) {
     this.clear();
-    this.canvas.getContext('2d').drawImage(modelCanvas, 0, 0);
+    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, new Interface());
     this.updateButtons();
   }
 

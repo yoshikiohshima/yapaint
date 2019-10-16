@@ -76,10 +76,13 @@ export class CommandArray {
     this.keys = [m1];
     this.data = new Map();
     this.data.set(m1, []);
+    this.commandCount = 0;
+
+    // above are essential fields
+    
     this.threshold = threshold || 128; // 1024
     this.uncachedCount = 0;
     this.willCacheWhenLeave = null;
-    this.commandCount = 0;
   }
 
   getCommandCount() {
@@ -87,6 +90,7 @@ export class CommandArray {
   }
 
   applyCommandsTo(canvas, toTime, cache, intf) {
+    intf.clear(canvas);
     let toTimeKey = toKey(toTime);
     let [index, bitmap] = cache.findClosestBitmap(toTime, this);
     this.applyBitmap(canvas, bitmap);
