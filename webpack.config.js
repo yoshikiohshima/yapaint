@@ -50,6 +50,7 @@ module.exports = [
     mode: 'development',
     entry: {
       dataTest: './src/dataTest.js',
+      timeTest: './src/timeTest.js',
     },
     output: {
       path: PUBLIC,

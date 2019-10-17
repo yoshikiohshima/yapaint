@@ -21,9 +21,17 @@
       <div id="compound" style="position: relative">
 	<div id="player" style="position: absolute"></div>
 	<canvas id="canvas" width=500 height=500 style="border: 1px solid black; position: absolute"></canvas>
+	<select id="addBitmapChoice" style="display: none; position: absolute;">
+	  <option value="awake">awake</option>
+	  <option value="left1">left1</option>
+	  <option value="up1">up1</option>
+	  <option value="right1">right1</option>
+	  <option value="down1">down1</option>
+	</select>
       </div>
       <div id="backstop" style="width: 500px; height: 500px; border: 1px solid red"></div>
       <div id="colors" class="colors" style="display: flex; flex-direction: column">
+	<button id="addBitmapButton" class="color-dot grow"/>
 	<button id="black" class="color-dot grow" style="background-color: black"/>
 	<button id="blue" class="color-dot grow" style="background-color: blue"/>
 	<button id="red" class="color-dot grow" style="background-color: red"/>

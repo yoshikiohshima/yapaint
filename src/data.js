@@ -46,15 +46,94 @@ export class Cache {
   }
 }
 
+export class Bitmap {
+  constructor(id, name) {
+    this.name = name;
+    this.id = id;
+    this.keys = [];
+    this.data = new Map();
+    // this.data {x, y, width, height, userId}
+  }
+
+  addPosition(time, position) {
+    let timeKey = toKey(time);
+    let [ind, toAdd] = this.findIndexFor(timeKey, 0, this.keys.length);
+    if (toAdd) {
+      this.keys.splice(ind, 0, timeKey);
+    }
+    
+    let array = this.data.set(timeKey);
+    if (!array) {
+      array = [];
+      this.data.set(timeKey, array);
+    }
+    array.push(position);
+  }
+
+  findLast(time) {
+    let timeKey = toKey(time);
+    let ind = this.findClosestIndex(timeKey);
+    let array = this.data.get(this.keys[ind]);
+    return array[array.length - 1];
+  }
+
+  undo() {
+    let lastKey = this.keys[this.keys.length - 1];
+    for (let k = this.keys.length - 1; k >= 0; k--) {
+      let array = this.data[this.keys[k]];
+      let key = this.keys[k];
+      let undo = array.pop();
+      if (array.length === 0) {
+        this.keys.splice(k, 1);
+        this.data.delete(key);
+      }
+      return undo;
+    }
+    return null; // should not reach
+  }
+
+  findIndexFor(timeKey, low, high) { // low is inclusive high is exclusive
+    if (high === low) {
+      return [low, true];
+    }
+
+    if (high - 1 === low) {
+      if (timeKey < this.keys[low]) {
+        return [low, true];
+      }
+      if (timeKey === this.keys[low]) {
+        return [low, false];
+      }
+      return [low + 1, true];
+    }
+
+    let mid = Math.floor((high + low) / 2);
+    if (timeKey < this.keys[mid]) {
+      return this.findIndexFor(timeKey, low, mid);
+    } else if (timeKey === this.keys[mid]) {
+      return [mid, false];
+    } else {
+      return this.findIndexFor(timeKey, mid, high);
+    }
+  }
+
+  findClosestIndex(timeKey) {
+    let [ind, notFound] = this.findIndexFor(timeKey, 0, this.keys.length);
+    return notFound ? ind - 1 : ind;
+  }
+}
+
 export class Command {
   constructor(type, info) {
     // type: 'stroke','finishStroke', 'addBitmap', 'removeBitmap', 'reframeBitmap',
     //   beginStroke: {start: {x: y}, end: {x, y}, color: string, width, userId} color == 'transparent': erase
     //   stroke: {start: {x: y}, end: {x, y}, color: string, width, userId}
     //   finishStroke: {start: {x: y}, end: {x, y}, color: string, width, userId}
-    //   addBitmap: {bitmapNameOrBitmap, x, y, id, userId}
+    //   addBitmap: {bitmapName, x, y, id, userId}
     //   removeBitmap: {id, userId}
     //   reframeBitmap: {id, startx, starty, endx, endy, useerId}
+    //   showSelection: {id, userId}
+    //   hideSelection: {id, userId}
     this.type = type;
     this.info = info;
   }
@@ -66,6 +145,8 @@ export class Command {
       intf.newSegment(canvas, this.info);
     } else if (this.type === 'clear') {
       intf.clear(canvas);
+    } else if (this.type === 'reframeBitmap') {
+      intf.drawBitmap(canvas, this.info);
     }
   }
 }
@@ -96,7 +177,7 @@ export class CommandArray {
     this.applyBitmap(canvas, bitmap);
 
     let i = index + 1;
-    
+
     while (true) {
       if (i >= this.keys.length || this.keys[i] > toTimeKey) {break;}
       let array = this.data.get(this.keys[i]);
@@ -205,6 +286,7 @@ export class CommandArray {
     if (command.command.type === 'clear') {
       let array = this.data.get(this.keys[timeInd]);
       array.splice(arrayInd, 1);
+      // if array size becomes zero...
       this.commandCount--;
       return [command];
     }

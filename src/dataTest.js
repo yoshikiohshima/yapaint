@@ -8,6 +8,22 @@ function add(commandArray, time, userId, command) {
   commandArray.add(time, userId, c(command));
 }
 
+class Interface {
+  newSegment(canvas, obj) {
+    console.log('new segment');
+  }
+
+  clear(canvas) {
+    console.log('clear');
+  }
+
+  emptyImageData(width, height) {
+    return new ImageData(width, height).data;
+  }
+}
+
+
+
 function c(n) {
   return new Command('test', n);
 }
@@ -28,7 +44,7 @@ function load() {
   add(commandArray, 0.777, 'abc', {stroke: 8});
   add(commandArray, 0.777, 'abc', {stroke: 9});
 
-  commandArray.applyCommandsTo(null, 0.666, cache);
+  commandArray.applyCommandsTo(null, 0.666, cache, new Interface());
 }
 
 window.onload = load;
