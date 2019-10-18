@@ -19,7 +19,11 @@ export function load() {
       img.onerror = () => {
         reject(n);
       };
-      img.src = `https://tinlizzie.org/~ohshima/neko/neko/${n}.png`;
+
+      let w = window.location;
+
+      let location = `${w.origin}${w.pathname}neko/${n}.png`;
+      img.src = location;
     });
   });
 

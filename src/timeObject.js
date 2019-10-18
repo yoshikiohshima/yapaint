@@ -67,19 +67,21 @@ export class Bitmap {
     return findLast(time, this);
   }
 
-  undo() {
-    let lastKey = this.keys[this.keys.length - 1];
-    for (let k = this.keys.length - 1; k >= 0; k--) {
-      let array = this.data[this.keys[k]];
-      let key = this.keys[k];
-      let undo = array.pop();
-      if (array.length === 0) {
-        this.keys.splice(k, 1);
-        this.data.delete(key);
+  applyTo(canvas, toTime, intf) {
+    let timeKey = toKey(toTime);
+    let endIndex = findClosestIndex(timeKey, this);
+    for (let i = endIndex; i >= 0; i--) {
+      let array = this.data.get(this.keys[i]);
+      if (array.length > 0) {
+        let info = array[array.length - 1];
+        intf.drawBitmap(canvas, this.name, info);
+        return;
       }
-      return undo;
     }
-    return null; // should not reach
+  }
+
+  undo(time) {
+    let timeKey = toKey(time);
   }
 }
 
@@ -126,11 +128,11 @@ export class Objects {
     let m1 = toKey(-1);
     this.keys = [m1];
     this.data = new Map();
-    this.data.set(m1, [[]]);
-    // this.data [timeObject]
+    this.data.set(m1, [{objects: [], history: [], redoHistory: [], selections: {}}]);
+    // this.data {objects: [timeObject], history: [id], redoHistory: [id], selections: {userId: obj}}
   }
 
-  add(time, newSet) {
+  add(time, info) {
     let timeKey = toKey(time);
     let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
     if (toAdd) {
@@ -142,7 +144,7 @@ export class Objects {
       array = [];
       this.data.set(timeKey, array);
     }
-    array.push(newSet);
+    array.push(info);
   }
 
   last(time) {
@@ -151,13 +153,13 @@ export class Objects {
 
   get(time, objectId) {
     let last = findLast(time, this);
-    return last.find((c) => c.id === objectId);
+    return last.objects.find((c) => c.id === objectId);
   }
 
   applyTo(canvas, toTime, intf) {
     intf.clear(canvas);
     let timeKey = toKey(toTime);
     let last = findLast(toTime, this);
-    last.forEach((obj) => obj.applyTo(canvas, toTime, intf));
+    last.objects.forEach((obj) => obj.applyTo(canvas, toTime, intf));
   }
 }

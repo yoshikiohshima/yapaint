@@ -10,7 +10,6 @@ let isLocal = true;
 let session;
 
 let bitmaps;
-
 async function getBitmaps() {
   if (!bitmaps) {
     bitmaps = await load();
@@ -135,18 +134,16 @@ class Interface {
   }
 
   clear(canvas) {
-    let img = new ImageData(canvas.width, canvas.height);
-    canvas.getContext('2d').putImageData(img, 0, 0);
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
   }
 
   emptyImageData(width, height) {
     return new ImageData(width, height).data;
   }
 
-  drawBitmap(canvas, bitmap, time) {
-    let position = bitmap.findLast(time);
-    let glyph = bitmaps[bitmap.name];
-    canvas.getContext('2d').drawImage(glyph, 0, 0, glyph.width, glyph.height, position.x, position.y, position.width, position.height);
+  drawBitmap(canvas, name, info) {
+    let glyph = bitmaps[name];
+    canvas.getContext('2d').drawImage(glyph, 0, 0, glyph.width, glyph.height, info.x, info.y, info.width, info.height);
   }
 
   drawFrame(canvas, info) {
@@ -162,42 +159,50 @@ class Interface {
 class DrawingModel extends M {
   static types() {
     return {
-      Command: {
-        cls: Command,
+      Bitmap: {
+        cls: Bitmap,
         write: (c) => {
-          let {type, info} = c;
-          return {type, info};
+          let {name, id, keys, data} = c;
+          return {name, id, keys, data};
         },
         read: (obj) => {
-          return new Command(obj.type, obj.info);
+          let b = new Bitmap(obj.id, obj.name);
+          b.keys = obj.keys;
+          b.data = obj.data;
+          return b;
         }
       },
-      CommandArray: {
-        cls: CommandArray,
+      Stroke: {
+        cls: Stroke,
         write: (c) => {
-          let {keys, data, commandCount} = c;
-          return {keys, data, commandCount};
+          let {id, keys, data} = c;
+          return {id, keys, data};
         },
         read: (obj) => {
-          let c = new CommandArray();
-          c.keys = obj.keys;
-          c.data = obj.data;
-          c.commandCount = obj.commandCount;
-          return c;
+          let s = new Stroke(obj.id);
+          s.keys = obj.keys;
+          s.data = obj.data;
+          return s;
+        }
+      },
+      Objects: {
+        cls: Objects,
+        write: (c) => {
+          let {id, keys, data} = c;
+          return {id, keys, data};
+        },
+        read: (obj) => {
+          let o = new Objects(obj.id);
+          o.keys = obj.keys;
+          o.data = obj.data;
+          return o;
         }
       }
     }
   }
 
   init() {
-    this.objects = new Objects(newId()); // {id: Stroke|Bitmap}
-    this.history = [];
-    // [id]  For each undoable action on an object,
-    // a undoable sequence is added to the object's timeline, and then one id is added here. 
-    // undo is to take the last element from history, find out which object to undo, take a undoable action sequence from the object, and move it to redo;
-    this.redoHistory = [];
-
-    this.selections = {};
+    this.objects = new Objects(newId());
 
     this.now = 0;
     this.playing = false;
@@ -248,12 +253,21 @@ class DrawingModel extends M {
     obj.add(this.now, info);
   }
 
-  addSelection(userId, info) {
-    this.selections[userId] = info;
+  addSelection(userId, obj) {
+    let current = this.objects.last(this.now);
+    let newSelections = Object.assign({}, current.selections, {[userId]: obj});
+    this.objects.add(this.now, {...current, selections: newSelections});
   }
 
   removeSelection(userId) {
-    delete this.selections[userId];
+    let current = this.objects.last(this.now);
+    let {[userId]: _delete, ...newSelections} = current.selections;
+    this.objects.add(this.now, {...current, selections: newSelections});
+  }
+
+  getSelections() {
+    let current = this.objects.last(this.now);
+    return current.selections;
   }
 
   viewJoin(viewId) {}
@@ -261,10 +275,11 @@ class DrawingModel extends M {
   viewExit(viewId) {}
 
   beginStroke(info) {
-    // this.removeSelection(info.userId);
+    this.removeSelection(info.userId);
     let current = this.objects.last(this.now);
     let obj = new Stroke(info.objectId);
-    this.objects.add(this.now, [...current, obj]);
+    let newObjects = Object.assign({}, current, {objects: [...current.objects, obj]});
+    this.objects.add(this.now, newObjects);
     return info;
   }
 
@@ -275,67 +290,95 @@ class DrawingModel extends M {
   }
 
   finishStroke(info) {
-    this.history.push(info.objectId);
+    let current = this.objects.last(this.now);
+    let newObjects = Object.assign({}, current, {history: [...current.history, info.objectId]});
+    this.objects.add(this.now, newObjects);
     return info;
   }
 
   addBitmap(info) {
-    let userId = info.userId;
-    this.addCommand(userId, 'addBitmap', info);
-    this.addCommand(userId, 'reframeBitmap', info);
+    this.removeSelection(info.userId);
+    let current = this.objects.last(this.now);
+    let obj = new Bitmap(info.objectId, info.name);
+    obj.add(this.now, info);
+    
+    let newObjects = Object.assign({}, current, {objects: [...current.objects, obj]});
+    this.objects.add(this.now, newObjects);
     return info;
   }
 
-  reframeBitmap(obj) {
-    let ind = this.bitmaps.findIndex((b) => b.id === obj.id);
-    if (ind >= 0) {
-      this.bitmaps[ind] = obj;
-    }
-    this.addCommand(obj.userId, 'reframeBitmap', obj);
-    return obj;
+  reframeBitmap(info) {
+    let obj = this.objects.get(this.now, info.objectId);
+    this.add(obj, info);
+    return info;
   }
 
-  bitmapSelect(obj) {
-    let {x, y, userId} = obj;
+  bitmapSelect(info) {
+    let {x, y, userId} = info;
     this.removeSelection(userId);
 
-    let includesPoint = (info, x, y) => {
-      return (info.x <= x && x < info.width + info.x &&
-              info.y <= y && y < info.height + info.y);
+    let includesPoint = (rect, x, y) => {
+      return (rect.x <= x && x < rect.width + rect.x &&
+              rect.y <= y && y < rect.height + rect.y);
     };
 
     let find = (x, y) => {
-      for (let i = this.bitmaps.length - 1; i >= 0; i--) {
-        if (includesPoint(this.bitmaps[i], x, y)) {
-          return this.bitmaps[i];
+      let current = this.objects.last(this.now);
+      let objects = current.objects;
+      for (let i = objects.length - 1; i >= 0; i--) {
+        let obj = objects[i];
+        if (obj.constructor === Bitmap) {
+          let rect = obj.last(this.now);
+          if (includesPoint(rect, x, y)) {
+            return [obj, rect];
+          }
         }
       }
-      return null;
+      return [null, null];
     };
 
-    let maybe = find(x, y);
-    if (maybe) {
-      this.addSelection(userId, maybe);
-      return {message: 'bitmapSelect', userId, userId, name: maybe.name, id: maybe.id};
+    let [obj, position] = find(x, y);
+    if (obj) {
+      this.addSelection(userId, obj);
+      obj.add(this.now, Object.assign({select: true}, position));
+      return {message: 'bitmapSelect', userId, name: obj.name, id: obj.id, rect: position};
     }
     return undefined;
   }
 
   clear(info) {
-    let obj = this.objects;
-    this.add(obj, {});
+    let current = this.objects.last(this.now);
+    let newObjects = Object.assign({}, current, {objects: []});
+    this.objects.add(this.now, newObjects);
     return info;
   }
 
   undo(info) {
-    if (this.commands.getCommandCount() === 0) {return undefined;}
-    let actions = this.commands.undo(this.now);
-    this.redoCommands.unshift(actions);
+    let current = this.objects.last(this.now);
+    if (current.history.length === 0) {return undefined;}
+    
+    let newHistory = [...current.history];
+    let id = newHistory.shift();
 
+    let obj = this.objects.get(this.now, id);
+    obj.undo(this.now);
+
+    let newRedoHistory = [obj.id, ... current.redoHistory];
+
+    this.objects.add(this.now, {objects: current.objects, history: newHistory, redoHistory: newRedoHistory, selections: current.selections});
+    
     return info;
   }
 
   redo(info) {
+    let current = this.objects.last(this.now);
+    if (current.redoHistory.length === 0) {return undefined;}
+
+    let newRedoHistory = [...current.redoHistory];
+    let id = newRedoHistory.shift();
+
+    
+    
     let actions = this.redoCommands.shift();
     if (actions) {
       actions.forEach((c) => {
@@ -579,9 +622,11 @@ class DrawingView extends V {
         return false;
       };
 
-      if (this.mySelection && includesPoint(this.mySelection, this.lastPoint)) {
-        this.moveSelection = this.mySelection;
-        this.movePoint = {origX: this.mySelection.x, origY: this.mySelection.y, x: evt.offsetX, y: evt.offsetY};
+      if (this.mySelection) {
+        if (includesPoint(this.mySelection, this.lastPoint)) {
+          this.moveSelection = this.mySelection;
+          this.movePoint = {origX: this.mySelection.x, origY: this.mySelection.y, x: evt.offsetX, y: evt.offsetY};
+        }
       }
       return {message: 'bitmapSelect', ...this.lastPoint};
     }
@@ -608,12 +653,11 @@ class DrawingView extends V {
         return Object.assign({userId: this.viewId, objectId: this.strokeId}, stroke);
       }
       if (this.moveSelection) {
-        let {name, x, y, width, height, id, userId} = this.moveSelection;
-        let actionId = newId();
+        let {name, x, y, width, height, objectId, userId} = this.moveSelection;
         return {message: 'reframeBitmap', name,
                 x: this.movePoint.origX + (newPoint.x - this.movePoint.x),
                 y: this.movePoint.origY + (newPoint.y - this.movePoint.y),
-                width, height, id, userId, actionId};
+                width, height, objectId, userId};
       }
     }
     return undefined;
@@ -629,29 +673,29 @@ class DrawingView extends V {
   }
 
   drawFrames(intf) {
-    for (let k in this.model.selections) {
-      let selection = this.model.selections[k];
-      let info = this.model.bitmaps.find((b) => b.id === selection.id);
+    let current = this.model.objects.last(this.model.now);
+    let selections = current.selections;
+    for (let k in selections) {
+      let obj = selections[k];
+      let info = obj.last(this.model.now);
       intf.drawFrame(this.canvas, info);
     }
   }
 
-  beginStroke(obj) {
+  beginStroke(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    //this.drawFrames(intf);
+    this.drawFrames(intf);
   }
 
-  stroke(obj) {
-    if (VIEW_EARLY_DRAW && obj.userId === this.viewId) {return;}
+  stroke(info) {
+    if (VIEW_EARLY_DRAW && info.userId === this.viewId) {return;}
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    // this.drawFrames(intf);
+    this.drawFrames(intf);
   }
 
-  
-
-  finishStroke(obj) {
+  finishStroke(info) {
     this.updateButtons();
   }
 
@@ -691,35 +735,35 @@ class DrawingView extends V {
     let bits = bitmaps[name];
     if (bits) {
       let id = newId();
-      return {message: 'addBitmap', name: name, x: 100, y: 100, width: bits.width, height: bits.height, id, userId: this.viewId};
+      return {message: 'addBitmap', name: name, x: 100, y: 100, width: bits.width, height: bits.height, objectId: id, userId: this.viewId};
     }
     return undefined;
   }
 
-  addBitmap(obj) {
-    let intf = new Interface(this.model.bitmaps);
-    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, intf);
+  addBitmap(info) {
+    let intf = new Interface();
+    this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
   }
 
-  reframeBitmap(obj) {
-    let intf = new Interface(this.model.bitmaps);
-    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, intf);
+  reframeBitmap(info) {
+    let intf = new Interface();
+    this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
   }
   
   clear() {
-    let intf = new Interface(this.model.bitmaps);
-    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, intf);
+    let intf = new Interface();
+    this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
   }
 
-  bitmapSelect(obj) {
-    let intf = new Interface(this.model.bitmaps);
-    this.model.commands.applyCommandsTo(this.canvas, this.model.now, this.cache, intf);
+  bitmapSelect(info) {
+    let intf = new Interface();
+    this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
-    if (obj.userId === this.viewId) {
-      this.mySelection = this.model.selections[this.viewId];
+    if (info.userId === this.viewId) {
+      this.mySelection = info.rect;
     }
   }
 
@@ -729,11 +773,11 @@ class DrawingView extends V {
 
   clock(obj) {
     // this method is called only when the model got a new clock
-    let intf = new Interface(this.model.bitmaps);
+    let intf = new Interface();
     // this.model.commands.leave(this.model.now, this.canvas, this.cache);
 
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    // this.drawFrames(intf);
+    this.drawFrames(intf);
 
     this.elements.time.valueAsNumber = this.model.now;
     this.elements.readout.textContent = this.model.now.toFixed(2);
@@ -774,13 +818,14 @@ class DrawingView extends V {
   }
 
   updateButtons() {
-    if (this.model.history.length > 0) {
+    let last = this.model.objects.last(this.model.now);
+    if (last.history.length > 0) {
       this.elements.undoButton.classList.remove('disabled');
     } else {
       this.elements.undoButton.classList.add('disabled');
     }
     
-    if (this.model.redoHistory.length > 0) {
+    if (last.redoHistory.length > 0) {
       this.elements.redoButton.classList.remove('disabled');
     } else {
       this.elements.redoButton.classList.add('disabled');
