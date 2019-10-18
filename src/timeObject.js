@@ -79,10 +79,6 @@ export class Bitmap {
       }
     }
   }
-
-  undo(time) {
-    let timeKey = toKey(time);
-  }
 }
 
 export class Stroke {
@@ -125,11 +121,13 @@ export class Stroke {
 export class Objects {
   constructor(id) {
     this.id = id;
+    this.objects = {}; // {id: {object: object, from: fromTimeKey, to: toTimeKey | undefined}
+
     let m1 = toKey(-1);
     this.keys = [m1];
     this.data = new Map();
-    this.data.set(m1, [{objects: [], history: [], redoHistory: [], selections: {}}]);
-    // this.data {objects: [timeObject], history: [id], redoHistory: [id], selections: {userId: obj}}
+    this.data.set(m1, [{history: [], redoHistory: []}]);
+    // this.data {history: [id], redoHistory: [id]}
   }
 
   add(time, info) {
@@ -151,15 +149,43 @@ export class Objects {
     return findLast(time, this);
   }
 
-  get(time, objectId) {
-    let last = findLast(time, this);
-    return last.objects.find((c) => c.id === objectId);
+  addObject(time, obj) {
+    this.objects[obj.id] = {object: obj, from: toKey(time)};
   }
 
-  applyTo(canvas, toTime, intf) {
+  get(time, objectId) {
+    if (objectId === this.id) {
+      return this;
+    }
+    let timeKey = toKey(time);
+
+    let info = this.objects[objectId];
+
+    if (info.from <= timeKey &&
+        (info.to === undefined || timeKey < info.to)) {
+      return info.object;
+    }
+    return null;
+  }
+
+  liveObjectsDo(time, func) {
+    let timeKey = toKey(time);
+
+    for (let k in this.objects) {
+      let obj = this.get(time, k);
+      if (obj) {
+        func(obj);
+      }
+    }
+  }
+
+  killObjects(time) {
+    let timeKey = toKey(time);
+    this.liveObjectsDo(time, (obj) => this.objects[obj.id].to = timeKey);
+  }
+
+  applyTo(canvas, time, intf) {
     intf.clear(canvas);
-    let timeKey = toKey(toTime);
-    let last = findLast(toTime, this);
-    last.objects.forEach((obj) => obj.applyTo(canvas, toTime, intf));
+    this.liveObjectsDo(time, (obj) => obj.applyTo(canvas, time, intf));
   }
 }

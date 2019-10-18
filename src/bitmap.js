@@ -33,9 +33,7 @@ export function load() {
       result[bitmaps[i]] = array[i];
     }
     return result;
-  });
+  })
 }
-  
-  
     
   
