@@ -79,6 +79,40 @@ export class Bitmap {
       }
     }
   }
+
+  undo() {
+    if (this.keys.length === 0) {return null;}
+
+    let key = this.keys[this.keys.length - 1];
+    let array = this.data.get(key);
+    let last = array[array.length - 1];
+    if (last.message === 'addBitmap') {
+      array.pop();
+      return [last];
+    }
+
+    if (last.message === 'reframeBitmap') {
+      for (let i = this.keys.length - 1; i >= 0; i--) {
+        let e;
+        let ind;
+        let key = this.keys[i]
+        let array = this.data.get(key);
+        for (ind = array.length - 1; ind >= 0; ind--) {
+          e = array[ind];
+          if (e.message !== 'select' && e.message !== 'reframeBitmap') {
+            break;
+          }
+        }
+        if (ind < 0) {
+          this.data.delete(key);
+          this.keys.splice(i);
+        } else {
+          array.splice(ind + 1);
+          return;
+        }
+      }
+    }
+  }
 }
 
 export class Stroke {
@@ -116,51 +150,33 @@ export class Stroke {
       array.forEach((segment) => intf.newSegment(canvas, segment));
     }
   }
+
+  undo() {
+    if (this.keys.length === 0) {return null;}
+    let array = this.data[this.keys[0]];
+    return array[0];
+  }
 }
 
 export class Objects {
   constructor(id) {
     this.id = id;
     this.objects = {}; // {id: {object: object, from: fromTimeKey, to: toTimeKey | undefined}
-
-    let m1 = toKey(-1);
-    this.keys = [m1];
-    this.data = new Map();
-    this.data.set(m1, [{history: [], redoHistory: []}]);
-    // this.data {history: [id], redoHistory: [id]}
-  }
-
-  add(time, info) {
-    let timeKey = toKey(time);
-    let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
-    if (toAdd) {
-      this.keys.splice(ind, 0, timeKey);
-    }
-    
-    let array = this.data.get(timeKey);
-    if (!array) {
-      array = [];
-      this.data.set(timeKey, array);
-    }
-    array.push(info);
-  }
-
-  last(time) {
-    return findLast(time, this);
   }
 
   addObject(time, obj) {
     this.objects[obj.id] = {object: obj, from: toKey(time)};
   }
 
+  undoAddObject(object) {
+    let obj = this.objects[object.id].object;
+    delete this.objects[object.id];
+    return obj;
+  }
+
   get(time, objectId) {
-    if (objectId === this.id) {
-      return this;
-    }
     let timeKey = toKey(time);
-
     let info = this.objects[objectId];
-
     if (info.from <= timeKey &&
         (info.to === undefined || timeKey < info.to)) {
       return info.object;
@@ -179,13 +195,58 @@ export class Objects {
     }
   }
 
+  undo(id, time) {
+    let obj = this.get(time, id);
+    return obj.undo();
+  }
+
   killObjects(time) {
     let timeKey = toKey(time);
-    this.liveObjectsDo(time, (obj) => this.objects[obj.id].to = timeKey);
+    let undo = {};
+    this.liveObjectsDo(time, (obj) => {
+      undo[obj.id] = {oldTo: this.objects[obj.id].to, newTo: timeKey};
+      this.objects[obj.id].to = timeKey;
+    });
+    return undo;
   }
 
   applyTo(canvas, time, intf) {
     intf.clear(canvas);
     this.liveObjectsDo(time, (obj) => obj.applyTo(canvas, time, intf));
+  }
+}
+
+export class Action {
+  constructor(type, info) {
+    this.type = type;
+    this.info = info;
+  }
+
+  redo(model) {
+    let objects = model.objects;
+    if (this.type === 'clear') {
+      for (let k in this.info) {
+        objects.objects[k].to = this.info[k].newTo;
+      }
+    } else if (this.type === 'addObject') {
+      objects.addObject(model.now, this.info);
+    } else if (this.type === 'finishReframeBitmap') {
+      let bitmap = objects.objects[this.info.objectId].object;
+      bitmap.add(model.now, this.info);
+    }
+  }
+
+  undo(model) {
+    let objects = model.objects;
+    if (this.type === 'clear') {
+      for (let k in this.info) {
+        objects.objects[k].to = this.info[k].oldTo;
+      }
+    } else if (this.type === 'addObject') {
+      objects.undoAddObject(this.info);
+    } else if (this.type === 'finishReframeBitmap') {
+      let bitmap = objects.objects[this.info.objectId].object;
+      bitmap.undo();
+    }
   }
 }
