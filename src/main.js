@@ -2,11 +2,10 @@
 
 import * as Croquet from '@croquet/croquet';
 
-//import {Cache, Command, CommandArray, toKey, Bitmap} from './data.js';
 import {load} from './bitmap.js';
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
 
-let isLocal = true;
+let isLocal = false;
 let session;
 
 let bitmaps;
@@ -111,7 +110,7 @@ function makeMockReflector(modelClass, viewClass) {
 }
 
 class Interface {
-  newSegment(canvas, obj) {
+  newSegment(canvas, obj, transform) {
     let {x0, y0, x1, y1, color} = obj;
     let ctx = canvas.getContext('2d');
 
@@ -119,10 +118,15 @@ class Interface {
     
     ctx.lineWidth = color === 'white' ? 6 : 2;
 
+    ctx.save();
+
+    ctx.transform(transform[0], transform[3], transform[1], transform[4], transform[2], transform[5]);
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
     ctx.stroke();
+
+    ctx.restore();
   }
 
   clear(canvas) {
@@ -144,16 +148,18 @@ class Interface {
 
   drawFrame(canvas, info) {
     let t = info.transform;
-    let x = info.width;
-    let y = info.height;
-    let p = {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
-    
     let ctx = canvas.getContext('2d');
     ctx.lineWidth = 4;
     ctx.strokeStyle = '#b1b1bf8c';
+
+    ctx.save();
+
+    ctx.transform(t[0], t[3], t[1], t[4], t[2], t[5]);
+    
     ctx.beginPath();
-    ctx.rect(t[2], t[5], p.x - t[2], p.y - t[5]);
+    ctx.rect(info.ox || 0, info.oy || 0, info.width, info.height);
     ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -247,6 +253,7 @@ class DrawingModel extends M {
       'undo': 'undo',
       'redo': 'redo',
       'select': 'select',
+      'unselect': 'unselect',
       // ---
       'load': 'load',
       'clock': 'clock',
@@ -296,28 +303,41 @@ class DrawingModel extends M {
 
   beginStroke(info) {
     this.removeSelection(info.userId);
-    let obj = new Stroke(info.objectId);
-    this.objects.addObject(this.now, obj);
-    let action = new Action('addObject', obj);
-    this.history.push(action);
     return info;
   }
 
   stroke(info) {
     let obj = this.objects.get(this.now, info.objectId);
+
+    if (!obj) {
+      obj = new Stroke(info.objectId);
+      obj.addTransform(this.now, {message: 'new', transform: [1, 0, 0, 0, 1, 0]});
+      this.objects.addObject(this.now, obj);
+      this.history.push(new Action('addObject', obj));
+    }
+    
     obj.add(this.now, info);
     return info;
   }
 
   finishStroke(info) {
-    //this.history.push(new Action('finishStroke', info.objectId));
+    // obj.add(this.now, {
+    //   message: 'finishStroke',
+    //   ox: last.ox,
+    //   oy: last.oy,
+    //   cx: last.cx,
+    //   cy: last.cy,
+    //   height: last.height,
+    //   width: last.width,
+    //   objectId: info.objectId
+    // });
     return info;
   }
 
   addBitmap(info) {
     this.removeSelection(info.userId);
     let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
-    obj.addTransform(this.now, {message: 'new', transform: [1, 0, 100, 0, 1, 100]});
+    obj.addTransform(this.now, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
     this.objects.addObject(this.now, obj);
     this.history.push(new Action('addObject', obj));
     return info;
@@ -327,32 +347,16 @@ class DrawingModel extends M {
     let obj = this.objects.get(this.now, info.objectId);
     if (!obj) {return;} // it is possible that another client just has cleared this object
 
-    let rect = obj.getRect(this.now);
-    let t = rect.transform;
-    if (info.firstReframe) {
-      let moveId = newId();
-      obj.add(this.now, {message: 'firstReframe', moveId, name: rect.name, width: rect.width, height: rect.height});
-      obj.addTransform(this.now, {message: 'firstReframe', moveId, transform: rect.transform});
-    } else {
-      let newTransform = info.transform;
-      obj.addTransform(this.now, {message: 'reframe', transform: newTransform});
-    }
-    return {message: 'reframe'};
+    obj.reframe(this.now, info);
+    return info;
   }
 
   finishReframe(info) {
     let obj = this.objects.get(this.now, info.objectId);
     if (!obj) {return;}
-    let userId = info.userId;
 
-    let last = obj.last(this.now);
-    let transform = obj.transform.last(this.now).transform;
-
-    obj.add(this.now, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
-
-    this.history.push(new Action('finishReframe', {
-      message: 'reframe', objectId: info.objectId, width: info.width, height: info.height, oldTransform: info.transform, newTransform: transform
-    }));
+    let action = obj.finishReframe(this.now, info);
+    this.history.push(action);
 
     return info;
   }
@@ -363,6 +367,11 @@ class DrawingModel extends M {
     if (!obj) {return;} // it is possible that another client just has cleared this object
     
     this.addSelection(userId, obj);
+    return info;
+  }
+
+  unselect(info) {
+    this.removeSelection(info.userId);
     return info;
   }
 
@@ -525,6 +534,7 @@ class DrawingView extends V {
       'reframe': 'reframe',
       'finishReframe': 'finishReframe',
       'select': 'select',
+      'unselect': 'unselect',
       'toggleGoStop': 'toggleGoStop',
       'load': 'load',
       'configure': 'configure',
@@ -675,12 +685,12 @@ class DrawingView extends V {
         x1: newPoint.x, y1: newPoint.y, color
       };
       if (VIEW_EARLY_DRAW) {
-        new Interface(this.model.bitmaps).newSegment(this.canvas, stroke);
+        new Interface(this.model.bitmaps).newSegment(this.canvas, stroke, [1, 0, 0, 0, 1, 0]);
       }
       this.lastPoint = newPoint;
       return Object.assign({userId, objectId: this.strokeId}, stroke);
     } else if (this.moveSelection) {
-      let {width, height, transform, objectId} = this.moveSelection;
+      let {transform, objectId} = this.moveSelection; // width and height?
 
       let firstReframe = this.movePoint.newX === undefined;
 
@@ -719,6 +729,7 @@ class DrawingView extends V {
   drawFrames(intf) {
     for (let k in this.model.selections) {
       let obj = this.model.selections[k];
+      if (!obj) {continue;}
       let info = obj.getRect(this.model.now);
       intf.drawFrame(this.canvas, info);
     }
@@ -806,6 +817,12 @@ class DrawingView extends V {
   }
 
   select(info) {
+    let intf = new Interface();
+    this.model.objects.applyTo(this.canvas, this.model.now, intf);
+    this.drawFrames(intf);
+  }
+
+  unselect(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);

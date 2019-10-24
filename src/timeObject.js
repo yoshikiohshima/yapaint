@@ -88,12 +88,12 @@ export class Transform {
     array.push(info);
   }
 
-  last(time) {
+  get(time) {
     return findLast(time, this);
   }
 
   transformPoint(time, x, y) {
-    let r = this.last(time).transform;
+    let r = this.get(time).transform;
     return {x: r[0] * x + r[1] * y + r[2], y: r[3] * x + r[4] * y + r[5]};
   }
 
@@ -157,25 +157,50 @@ export class Bitmap {
     array.push(info);
   }
 
-  last(time) {
+  get(time) {
     return findLast(time, this);
   }
 
   includesPoint(time, x, y) {
-    let last = this.last(time);
+    let last = this.get(time);
+    if (!last) {return false;}
     let o = this.transform.transformPoint(time, 0, 0);
     let c = this.transform.transformPoint(time, last.width, last.height);
     return o.x <= x && x < c.x && o.y <= y && y < c.y;
   }
 
   getRect(time) {
-    let last = this.last(time);
-    let transform = this.transform.last(time).transform;
+    let last = this.get(time);
+    let transform = this.transform.get(time).transform;
     return {name: last.name, width: last.width, height: last.height, transform: transform};
   }
 
+  reframe(time, info) {
+    let rect = this.getRect(time);
+    let t = rect.transform;
+    if (info.firstReframe) {
+      let moveId = newId();
+      this.add(time, {message: 'firstReframe', moveId, name: rect.name, width: rect.width, height: rect.height});
+      this.addTransform(time, {message: 'firstReframe', moveId, transform: rect.transform});
+    } else {
+      let newTransform = info.transform;
+      this.addTransform(time, {message: 'reframe', transform: newTransform});
+    }
+  }
+
+  finishReframe(time, info) {
+    let last = this.get(time);
+    let transform = this.transform.get(time).transform;
+
+    this.add(time, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
+
+    return new Action('finishReframe', {
+      message: 'reframe', objectId: info.objectId, width: last.width, height: last.height, oldTransform: info.transform, newTransform: transform
+    });
+  }
+
   applyTo(canvas, time, intf) {
-    let last = this.last(time);
+    let last = this.get(time);
     intf.drawBitmap(canvas, last.name, this.getRect(time));
   }
 
@@ -225,13 +250,12 @@ export class Stroke {
     this.transform = new Transform();
     this.keys = [];
     this.data = new Map();
-    // this.data {x0, y0, x1, y1, width, color, ox, oy, cx, cy}
-    //           | select
+    // this.data {x0, y0, x1, y1, lineWidth, color, ox, oy, width, height}
     //           | reframe
   }
 
   add(time, info) {
-    let last = this.last(time) || {ox: Infinity, oy: Infinity, cx: -Infinity, cy: -Infinity};
+    let last = this.get(time) || {ox: Infinity, oy: Infinity, cx: -Infinity, cy: -Infinity, width: 0, height: 0};
     let timeKey = toKey(time);
     let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
     if (toAdd) {
@@ -245,14 +269,18 @@ export class Stroke {
     }
 
     let newInfo;
-    if (info.message === "select") {
+    if (info.message !== "stroke") {
       newInfo = info;
     } else {
+      let ox = Math.min(last.ox, info.x0, info.x1);
+      let oy = Math.min(last.oy, info.y0, info.y1);
+      let cx = Math.max(last.cx, info.x0, info.x1);
+      let cy = Math.max(last.cy, info.y0, info.y1);
       newInfo = {...info,
-                 ox: Math.min(last.ox, info.x0, info.x1), 
-                 oy: Math.min(last.oy, info.y0, info.y1), 
-                 cx: Math.max(last.cx, info.x0, info.x1), 
-                 cy: Math.max(last.cy, info.y0, info.y1)}
+                 ox,oy,
+                 cx, cy,
+                 width: cx - ox,
+                 height: cy - oy};
     }
     array.push(newInfo);
   }
@@ -261,19 +289,46 @@ export class Stroke {
     this.transform.add(time, transform);
   }
 
-  last(time) {
+  get(time) {
     return findLast(time, this);
   }
 
   includesPoint(time, x, y) {
-    let rect = this.last(time);
-    return (rect.ox <= x && x < rect.cx &&
-            rect.oy <= y && y < rect.cy);
+    let last = this.get(time);
+    let o = this.transform.transformPoint(time, last.ox, last.oy);
+    let c = this.transform.transformPoint(time, last.cx, last.cy);
+    return o.x <= x && x < c.x && o.y <= y && y < c.y;
   }
 
   getRect(time) {
-    let rect = this.last(time);
-    return {ox: rect.ox, oy: rect.oy, cx: rect.cx, cy: rect.cy};
+    let last = this.get(time);
+    let transform = this.transform.get(time).transform;
+    return {ox: last.ox, oy: last.oy, cx: last.cx, cy: last.cy, width: last.width, height: last.height, transform: transform};
+    // return {ox: rect.ox, oy: rect.oy, cx: rect.cx, cy: rect.cy};
+  }
+
+  reframe(time, info) {
+    let rect = this.getRect(time);
+    let t = rect.transform;
+    if (info.firstReframe) {
+      let moveId = newId();
+      this.add(time, {message: 'firstReframe', moveId, ox: rect.ox, oy: rect.oy, cx: rect.cx, cy: rect.cy, width: rect.width, height: rect.height});
+      this.addTransform(time, {message: 'firstReframe', moveId, transform: rect.transform});
+    } else {
+      let newTransform = info.transform;
+      this.addTransform(time, {message: 'reframe', transform: newTransform});
+    }
+  }
+
+  finishReframe(time, info) {
+    let last = this.get(time);
+    let transform = this.transform.get(time).transform;
+
+    this.add(time, {message: 'finishReframe', ox: last.ox, oy: last.oy, cx: last.cx, cy: last.cy, width: last.width, height: last.height});
+
+    return new Action('finishReframe', {
+      message: 'reframe', objectId: info.objectId, ox: last.ox, oy: last.oy, cx: last.cx, cy: last.cy, width: last.width, height: last.height, oldTransform: info.transform, newTransform: transform
+    });
   }
 
   applyTo(canvas, toTime, intf) {
@@ -281,14 +336,50 @@ export class Stroke {
     let endIndex = findClosestIndex(timeKey, this);
     for (let i = 0; i <= endIndex; i++) {
       let array = this.data.get(this.keys[i]);
-      array.forEach((segment) => intf.newSegment(canvas, segment));
+      array.forEach((segment) => {
+        let transform = this.transform.get(toTime).transform;
+        intf.newSegment(canvas, segment, transform);
+      });
     }
   }
 
-  undo() {
+  undo(time) {
     if (this.keys.length === 0) {return null;}
-    let array = this.data[this.keys[0]];
-    return array[0];
+
+    let timeKey = toKey(time);
+    let nowInd = findClosestIndex(timeKey, this);
+
+    let array = this.data.get(this.keys[nowInd]);
+    let last = array[array.length - 1];
+    let moveId;
+    
+    if (last.message === 'finishReframe') {
+      for (let i = nowInd; i >= 0; i--) {
+        let e;
+        let ind;
+        let key = this.keys[i]
+        let array = this.data.get(key);
+        for (ind = array.length - 1; ind >= 0; ind--) {
+          if (i === this.keys.length - 1 && ind === array.length - 1) {continue;}
+          e = array[ind];
+          if (e.message === 'firstReframe') {
+            moveId = e.moveId;
+            break;
+          }
+        }
+        if (ind <= 0) {
+          this.data.delete(key);
+          this.keys.splice(i);
+        } else {
+          array.splice(ind);
+          
+        }
+        if (moveId) {
+          this.transform.undo(time, moveId);
+          return;
+        }
+      }
+    }
   }
 }
 
@@ -311,6 +402,7 @@ export class Objects {
   get(time, objectId) {
     let timeKey = toKey(time);
     let info = this.objects[objectId];
+    if (!info) {return null;}
     if (info.from <= timeKey &&
         (info.to === undefined || timeKey < info.to)) {
       return info.object;
@@ -379,7 +471,7 @@ export class Action {
       objects.addObject(model.now, this.info);
     } else if (this.type === 'finishReframe') {
       let obj = objects.objects[this.info.objectId].object;
-      let last = obj.last(model.now);
+      let last = obj.get(model.now);
       let moveId = newId();
       obj.add(model.now, {message: 'firstReframe', moveId, name: last.name, width: last.width, height: last.height});
       obj.addTransform(model.now, {message: 'firstReframe', moveId, transform: this.info.oldTransform});
