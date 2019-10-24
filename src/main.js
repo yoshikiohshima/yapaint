@@ -4,9 +4,9 @@ import * as Croquet from '@croquet/croquet';
 
 //import {Cache, Command, CommandArray, toKey, Bitmap} from './data.js';
 import {load} from './bitmap.js';
-import {Objects, Stroke, Bitmap, Action} from './timeObject.js';
+import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
 
-let isLocal = false;
+let isLocal = true;
 let session;
 
 let bitmaps;
@@ -110,14 +110,6 @@ function makeMockReflector(modelClass, viewClass) {
   return mockReflector;
 }
 
-function newId() {
-  function hex() {
-    let r = Math.random();
-    return Math.floor(r * 256).toString(16).padStart(2, "0");
-  }
-  return`${hex()}${hex()}${hex()}${hex()}`;
-}
-
 class Interface {
   newSegment(canvas, obj) {
     let {x0, y0, x1, y1, color} = obj;
@@ -125,7 +117,7 @@ class Interface {
 
     ctx.strokeStyle = color;
     
-    ctx.lineWidth = color === 'white' ? 4 : 2;
+    ctx.lineWidth = color === 'white' ? 6 : 2;
 
     ctx.beginPath();
     ctx.moveTo(x0, y0);
@@ -143,15 +135,24 @@ class Interface {
 
   drawBitmap(canvas, name, info) {
     let glyph = bitmaps[name];
-    canvas.getContext('2d').drawImage(glyph, 0, 0, glyph.width, glyph.height, info.x, info.y, info.width, info.height);
+    let t = info.transform;
+    let x = info.width;
+    let y = info.height;
+    let p = {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
+    canvas.getContext('2d').drawImage(glyph, 0, 0, glyph.width, glyph.height, t[2], t[5], p.x - t[2], p.y - t[5]);
   }
 
   drawFrame(canvas, info) {
+    let t = info.transform;
+    let x = info.width;
+    let y = info.height;
+    let p = {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
+    
     let ctx = canvas.getContext('2d');
     ctx.lineWidth = 4;
     ctx.strokeStyle = '#b1b1bf8c';
     ctx.beginPath();
-    ctx.rect(info.x, info.y, info.width, info.height);
+    ctx.rect(t[2], t[5], p.x - t[2], p.y - t[5]);
     ctx.stroke();
   }
 }
@@ -162,11 +163,11 @@ class DrawingModel extends M {
       Bitmap: {
         cls: Bitmap,
         write: (c) => {
-          let {name, id, keys, data} = c;
-          return {name, id, keys, data};
+          let {id, transform, keys, data} = c;
+          return {id, transform, keys, data};
         },
         read: (obj) => {
-          let b = new Bitmap(obj.id, obj.name);
+          let b = new Bitmap(obj.id);
           b.keys = obj.keys;
           b.data = obj.data;
           return b;
@@ -175,14 +176,26 @@ class DrawingModel extends M {
       Stroke: {
         cls: Stroke,
         write: (c) => {
-          let {id, keys, data} = c;
-          return {id, keys, data};
+          let {id, transform, keys, data} = c;
+          return {id, transform, keys, data};
         },
         read: (obj) => {
           let s = new Stroke(obj.id);
           s.keys = obj.keys;
           s.data = obj.data;
           return s;
+        }
+      },
+      Transform: {
+        cls: Transform,
+        write: (c) => {
+          let {keys, data} = c;
+          return {keys, data};
+        },
+        read: (obj) => {
+          let t = new Transform();
+          t.keys = obj.keys;
+          t.data = obj.data;
         }
       },
       Objects: {
@@ -226,14 +239,14 @@ class DrawingModel extends M {
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
       'addBitmap': 'addBitmap',
-      'reframeBitmap': 'reframeBitmap',
-      'finishReframeBitmap': 'finishReframeBitmap',
+      'reframe': 'reframe',
+      'finishReframe': 'finishReframe',
       'removeBitmap': 'removeBitmap',
       'color': 'color',
       'clear': 'clear',
       'undo': 'undo',
       'redo': 'redo',
-      'bitmapSelect': 'bitmapSelect',
+      'select': 'select',
       // ---
       'load': 'load',
       'clock': 'clock',
@@ -303,58 +316,54 @@ class DrawingModel extends M {
 
   addBitmap(info) {
     this.removeSelection(info.userId);
-    let obj = new Bitmap(info.objectId, info.name);
-    obj.add(this.now, info);
+    let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
+    obj.addTransform(this.now, {message: 'new', transform: [1, 0, 100, 0, 1, 100]});
     this.objects.addObject(this.now, obj);
     this.history.push(new Action('addObject', obj));
     return info;
   }
 
-  reframeBitmap(info) {
+  reframe(info) {
     let obj = this.objects.get(this.now, info.objectId);
-    if (obj) {
-      obj.add(this.now, info);
-      return info;
+    if (!obj) {return;} // it is possible that another client just has cleared this object
+
+    let rect = obj.getRect(this.now);
+    let t = rect.transform;
+    if (info.firstReframe) {
+      let moveId = newId();
+      obj.add(this.now, {message: 'firstReframe', moveId, name: rect.name, width: rect.width, height: rect.height});
+      obj.addTransform(this.now, {message: 'firstReframe', moveId, transform: rect.transform});
+    } else {
+      let newTransform = info.transform;
+      obj.addTransform(this.now, {message: 'reframe', transform: newTransform});
     }
-    return undefined;
+    return {message: 'reframe'};
   }
 
-  finishReframeBitmap(info) {
-    let {objectId, x, y, width, height, oldX, oldY} = info;
-    this.history.push(new Action('finishReframeBitmap', {
-      message: 'reframeBitmap', name, x, y, width, height, 
-      objectId, oldX, oldY
+  finishReframe(info) {
+    let obj = this.objects.get(this.now, info.objectId);
+    if (!obj) {return;}
+    let userId = info.userId;
+
+    let last = obj.last(this.now);
+    let transform = obj.transform.last(this.now).transform;
+
+    obj.add(this.now, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
+
+    this.history.push(new Action('finishReframe', {
+      message: 'reframe', objectId: info.objectId, width: info.width, height: info.height, oldTransform: info.transform, newTransform: transform
     }));
+
     return info;
   }
 
-  bitmapSelect(info) {
-    let {x, y, userId} = info;
-    this.removeSelection(userId);
-
-    let includesPoint = (rect, x, y) => {
-      return (rect.x <= x && x < rect.width + rect.x &&
-              rect.y <= y && y < rect.height + rect.y);
-    };
-
-    let result;
-
-    try {
-      this.objects.liveObjectsDo(this.now, obj => {
-        if (obj.constructor === Bitmap) {
-          let rect = obj.last(this.now);
-          if (includesPoint(rect, x, y)) {
-            this.addSelection(userId, obj);
-            obj.add(this.now, Object.assign({}, rect, {message: 'select'}));
-            result = {message: 'bitmapSelect', userId, name: obj.name, id: obj.id, rect};
-            throw "found";
-          }
-        }
-      });
-    } catch (e) {
-    }
+  select(info) {
+    let obj = this.objects.get(this.now, info.objectId);
+    let userId = info.userId;
+    if (!obj) {return;} // it is possible that another client just has cleared this object
     
-    return result;
+    this.addSelection(userId, obj);
+    return info;
   }
 
   clear(info) {
@@ -513,9 +522,9 @@ class DrawingView extends V {
       'undo': 'undo',
       'redo': 'redo',
       'addBitmap': 'addBitmap',
-      'reframeBitmap': 'reframeBitmap',
-      'finishReframeBitmap': 'finishReframeBitmap',
-      'bitmapSelect': 'bitmapSelect',
+      'reframe': 'reframe',
+      'finishReframe': 'finishReframe',
+      'select': 'select',
       'toggleGoStop': 'toggleGoStop',
       'load': 'load',
       'configure': 'configure',
@@ -604,56 +613,88 @@ class DrawingView extends V {
   }
 
   mouseDown(evt) {
-    this.lastPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
+    this.lastPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY, shiftKey: evt.shiftKey};
 
-    if (evt.shiftKey) {
-      let includesPoint = (selection, lastPoint) => {
-        if (selection) {
-          return (selection.x <= lastPoint.x && lastPoint.x < selection.x + selection.width &&
-                  selection.y <= lastPoint.y && lastPoint.y < selection.y + selection.height);
-        }
-        return false;
-      };
+    let {x, y, shiftKey, userId} = this.lastPoint;
+    let mySelection = this.model.selections[userId];
+    let newClick = this.model.objects.liveObjects(this.model.now).find(obj => {
+      return obj.includesPoint(this.model.now, x, y); // && not selected by others
+    });
 
-      if (this.mySelection) {
-        if (includesPoint(this.mySelection, this.lastPoint)) {
-          this.moveSelection = this.mySelection;
-          this.movePoint = {origX: this.mySelection.x, origY: this.mySelection.y, x: evt.offsetX, y: evt.offsetY};
+    if (mySelection) {
+      if (newClick) {
+        if (mySelection === newClick) {
+          if (shiftKey) {
+            return {message: 'unselect', userId};
+          } else {
+            let info = newClick.getRect(this.model.now);
+            let transform = info.transform;
+            this.moveSelection = {objectId: newClick.id, ...info};
+            this.movePoint = {origX: transform[2], origY: transform[5], x, y};
+          }
+        } else { // mySelection !== newClick
+          if (shiftKey) {
+            // would be multi select
+            return {message: 'unselect', userId};
+          } else {
+            return {message: 'unselect', userId};
+          }
         }
+      } else {
+        return {message: 'unselect', userId};
       }
-      return {message: 'bitmapSelect', ...this.lastPoint};
+    } else {
+      if (shiftKey) {
+        if (newClick) {
+          let info = newClick.getRect(this.model.now);
+          let transform = info.transform;
+          this.moveSelection = {objectId: newClick.id, ...info};
+          this.movePoint = {origX: transform[2], origY: transform[5], x, y};
+          return {message: 'select', userId, objectId: newClick.id};
+        } else {
+          return undefined;
+        }
+      } else {
+        this.strokeId = newId();
+        return {message: 'beginStroke', color: this.color, objectId: this.strokeId};
+      }
     }
-    
-    this.strokeId = newId();
-    return Object.assign({message: 'beginStroke', color: this.color, objectId: this.strokeId}, this.lastPoint);
   }
 
   mouseMove(evt) {
-    if (this.lastPoint !== null) {
-      let newPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY};
-      if (this.strokeId) {
-        if (this.lastPoint.x === newPoint.x && this.lastPoint.y === newPoint.y) {return undefined;}
-        let color = this.color;
-        let stroke = {
-          message: 'stroke',
-          x0: this.lastPoint.x, y0: this.lastPoint.y,
-          x1: newPoint.x, y1: newPoint.y, color
-        };
-        if (VIEW_EARLY_DRAW) {
-          new Interface(this.model.bitmaps).newSegment(this.canvas, stroke);
-        }
-        this.lastPoint = newPoint;
-        return Object.assign({userId: this.viewId, objectId: this.strokeId}, stroke);
+    if (!this.lastPoint) {return undefined;}
+    let userId = this.viewId;
+    
+    let newPoint = {userId, x: evt.offsetX, y: evt.offsetY};
+    if (this.strokeId) {
+      if (this.lastPoint.x === newPoint.x && this.lastPoint.y === newPoint.y) {return undefined;}
+      let color = this.color;
+      let stroke = {
+        message: 'stroke',
+        x0: this.lastPoint.x, y0: this.lastPoint.y,
+        x1: newPoint.x, y1: newPoint.y, color
+      };
+      if (VIEW_EARLY_DRAW) {
+        new Interface(this.model.bitmaps).newSegment(this.canvas, stroke);
       }
-      if (this.moveSelection) {
-        let {name, x, y, width, height, objectId, userId} = this.moveSelection;
-        this.movePoint.newX = this.movePoint.origX + (newPoint.x - this.movePoint.x);
-        this.movePoint.newY = this.movePoint.origY + (newPoint.y - this.movePoint.y);
-        return {message: 'reframeBitmap', name,
-                x: this.movePoint.newX,
-                y: this.movePoint.newY,
-                width, height, objectId, userId};
-      }
+      this.lastPoint = newPoint;
+      return Object.assign({userId, objectId: this.strokeId}, stroke);
+    } else if (this.moveSelection) {
+      let {width, height, transform, objectId} = this.moveSelection;
+
+      let firstReframe = this.movePoint.newX === undefined;
+
+      this.movePoint.newX = this.movePoint.origX + (newPoint.x - this.movePoint.x);
+      this.movePoint.newY = this.movePoint.origY + (newPoint.y - this.movePoint.y);
+
+      let newTransform = transform.slice();
+      newTransform[2] = this.movePoint.newX;
+      newTransform[5] = this.movePoint.newY;
+      
+      return {message: 'reframe',
+              firstReframe,
+              transform: newTransform,
+              objectId, userId};
     }
     return undefined;
   }
@@ -668,16 +709,17 @@ class DrawingView extends V {
     this.strokeId = null;
     if (strokeId) {
       return {message: 'finishStroke', userId: this.viewId, objectId: strokeId, x: evt.offsetX, y: evt.offsetY};
-    } else if (moveSelection) {
-      let {name, x, y, width, height, objectId, userId} = moveSelection;
-      return {message: 'finishReframeBitmap', name, x: movePoint.newX, y: movePoint.newY, width, height, objectId: objectId, userId, oldX: movePoint.origX, oldY: movePoint.origY};
+    } else if (moveSelection && movePoint) {
+      if (movePoint.newX !== undefined) {
+        return {message: 'finishReframe', ...moveSelection};
+      }
     }
   }
 
   drawFrames(intf) {
     for (let k in this.model.selections) {
       let obj = this.model.selections[k];
-      let info = obj.last(this.model.now);
+      let info = obj.getRect(this.model.now);
       intf.drawFrame(this.canvas, info);
     }
   }
@@ -747,13 +789,13 @@ class DrawingView extends V {
     this.updateButtons();
   }
 
-  reframeBitmap(info) {
+  reframe(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
   }
 
-  finishReframeBitmap(info) {
+  finishReframe(info) {
     this.updateButtons();
   }
 
@@ -761,16 +803,12 @@ class DrawingView extends V {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
-    this.mySelection = null;
   }
 
-  bitmapSelect(info) {
+  select(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
-    if (info.userId === this.viewId) {
-      this.mySelection = info.rect;
-    }
   }
 
   timeChanged(arg) {

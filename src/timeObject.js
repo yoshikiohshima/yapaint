@@ -1,5 +1,13 @@
-export function toKey(n) {
+function toKey(n) {
   return Math.trunc(n * 1000);
+}
+
+export function newId() {
+  function hex() {
+    let r = Math.random();
+    return Math.floor(r * 256).toString(16).padStart(2, "0");
+  }
+  return`${hex()}${hex()}${hex()}${hex()}`;
 }
 
 function findIndexFor(timeKey, obj, low, high) { // low is inclusive high is exclusive
@@ -36,19 +44,36 @@ function findLast(time, obj) {
   let timeKey = toKey(time);
   let ind = findClosestIndex(timeKey, obj);
   let array = obj.data.get(obj.keys[ind]);
+  if (!array) {return undefined;}
   return array[array.length - 1];
 }
 
-export class Bitmap {
-  constructor(id, name) {
-    this.name = name; // file name
-    this.id = id;
-    this.keys = [];
-    this.data = new Map();
-    // this.data {x, y, width, height, userId}
+export class Transform {
+  static scale(time, n) {
+    let t = new Transform();
+    let ary = [n, 0, 0, 0, n, 0];
+    t.add(time, {message: 'scale', transform: ary});
+    return t;
   }
 
-  add(time, position) {
+  static translate(time, x, y) {
+    let t = new Transform();
+    let ary = [1, 0, x, 0, 1, y];
+    t.add(time, {message: 'translate', transform: ary});
+    return t;
+  }
+
+  static rotate(time, theta) {}
+
+  constructor() {
+    let m1 = toKey(-1);
+    this.keys = [m1];
+    this.data = new Map();
+    this.data.set(m1, [{message: 'identity', transform: [1, 0, 0, 0, 1, 0]}]);
+    // this.data {message: <string, transform: [a11, a12, a13, a21, a22, a23]}
+  }
+
+  add(time, info) {
     let timeKey = toKey(time);
     let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
     if (toAdd) {
@@ -60,54 +85,133 @@ export class Bitmap {
       array = [];
       this.data.set(timeKey, array);
     }
-    array.push(position);
+    array.push(info);
   }
 
   last(time) {
     return findLast(time, this);
   }
 
-  applyTo(canvas, toTime, intf) {
-    let timeKey = toKey(toTime);
-    let endIndex = findClosestIndex(timeKey, this);
-    for (let i = endIndex; i >= 0; i--) {
-      let array = this.data.get(this.keys[i]);
-      if (array.length > 0) {
-        let info = array[array.length - 1];
-        intf.drawBitmap(canvas, this.name, info);
+  transformPoint(time, x, y) {
+    let r = this.last(time).transform;
+    return {x: r[0] * x + r[1] * y + r[2], y: r[3] * x + r[4] * y + r[5]};
+  }
+
+  setTranslation(time, x, y) {
+    let last = findLast(time, this).transform;
+    this.add(time, [last[0], last[1], x, last[3], last[4], y]);
+  }
+
+  undo(time, moveId) {
+    let timeKey = toKey(time);
+    let nowInd = findClosestIndex(timeKey, this);
+    for (let i = nowInd; i >= 0; i--) {
+      let e;
+      let ind;
+      let key = this.keys[i]
+      let array = this.data.get(key);
+      for (ind = array.length - 1; ind >= 0; ind--) {
+        e = array[ind];
+        if (e.message === 'firstReframe' && e.moveId === moveId) {
+          break;
+        }
+      }
+      if (ind < 0) {
+        this.data.delete(key);
+        this.keys.splice(i);
+      } else {
+        array.splice(ind);
         return;
       }
     }
   }
+}
 
-  undo() {
+export class Bitmap {
+  constructor(id, name, width, height) {
+    this.id = id;
+    this.transform = new Transform();
+    let m1 = toKey(-1);
+    this.keys = [m1];
+    this.data = new Map();
+    this.data.set(m1, [{name, width, height}]);
+    // this.data {name, width, height}
+  }
+
+  addTransform(time, transform) {
+    this.transform.add(time, transform);
+  }
+
+  add(time, info) {
+    let timeKey = toKey(time);
+    let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
+    if (toAdd) {
+      this.keys.splice(ind, 0, timeKey);
+    }
+    
+    let array = this.data.get(timeKey);
+    if (!array) {
+      array = [];
+      this.data.set(timeKey, array);
+    }
+    array.push(info);
+  }
+
+  last(time) {
+    return findLast(time, this);
+  }
+
+  includesPoint(time, x, y) {
+    let last = this.last(time);
+    let o = this.transform.transformPoint(time, 0, 0);
+    let c = this.transform.transformPoint(time, last.width, last.height);
+    return o.x <= x && x < c.x && o.y <= y && y < c.y;
+  }
+
+  getRect(time) {
+    let last = this.last(time);
+    let transform = this.transform.last(time).transform;
+    return {name: last.name, width: last.width, height: last.height, transform: transform};
+  }
+
+  applyTo(canvas, time, intf) {
+    let last = this.last(time);
+    intf.drawBitmap(canvas, last.name, this.getRect(time));
+  }
+
+  undo(time) {
     if (this.keys.length === 0) {return null;}
 
-    let key = this.keys[this.keys.length - 1];
-    let array = this.data.get(key);
-    let last = array[array.length - 1];
-    if (last.message === 'addBitmap') {
-      array.pop();
-      return [last];
-    }
+    let timeKey = toKey(time);
+    let nowInd = findClosestIndex(timeKey, this);
 
-    if (last.message === 'reframeBitmap') {
-      for (let i = this.keys.length - 1; i >= 0; i--) {
+    let array = this.data.get(this.keys[nowInd]);
+    let last = array[array.length - 1];
+    let moveId;
+    
+    if (last.message === 'finishReframe') {
+      for (let i = nowInd; i >= 0; i--) {
         let e;
         let ind;
         let key = this.keys[i]
         let array = this.data.get(key);
         for (ind = array.length - 1; ind >= 0; ind--) {
+          if (i === this.keys.length - 1 && ind === array.length - 1) {continue;}
           e = array[ind];
-          if (e.message !== 'select' && e.message !== 'reframeBitmap') {
+          if (e.message === 'firstReframe') {
+            moveId = e.moveId;
             break;
           }
         }
-        if (ind < 0) {
+        if (ind <= 0) {
           this.data.delete(key);
           this.keys.splice(i);
         } else {
-          array.splice(ind + 1);
+          array.splice(ind);
+          
+        }
+        if (moveId) {
+          this.transform.undo(time, moveId);
           return;
         }
       }
@@ -118,12 +222,16 @@ export class Bitmap {
 export class Stroke {
   constructor(id) {
     this.id = id;
+    this.transform = new Transform();
     this.keys = [];
     this.data = new Map();
-    // this.data {x0, y0, x1, y1, width, color, userId}
+    // this.data {x0, y0, x1, y1, width, color, ox, oy, cx, cy}
+    //           | select
+    //           | reframe
   }
 
-  add(time, newSegment) {
+  add(time, info) {
+    let last = this.last(time) || {ox: Infinity, oy: Infinity, cx: -Infinity, cy: -Infinity};
     let timeKey = toKey(time);
     let [ind, toAdd] = findIndexFor(timeKey, this, 0, this.keys.length);
     if (toAdd) {
@@ -135,11 +243,37 @@ export class Stroke {
       array = [];
       this.data.set(timeKey, array);
     }
-    array.push(newSegment);
+
+    let newInfo;
+    if (info.message === "select") {
+      newInfo = info;
+    } else {
+      newInfo = {...info,
+                 ox: Math.min(last.ox, info.x0, info.x1), 
+                 oy: Math.min(last.oy, info.y0, info.y1), 
+                 cx: Math.max(last.cx, info.x0, info.x1), 
+                 cy: Math.max(last.cy, info.y0, info.y1)}
+    }
+    array.push(newInfo);
+  }
+
+  addTransform(time, transform) {
+    this.transform.add(time, transform);
   }
 
   last(time) {
     return findLast(time, this);
+  }
+
+  includesPoint(time, x, y) {
+    let rect = this.last(time);
+    return (rect.ox <= x && x < rect.cx &&
+            rect.oy <= y && y < rect.cy);
+  }
+
+  getRect(time) {
+    let rect = this.last(time);
+    return {ox: rect.ox, oy: rect.oy, cx: rect.cx, cy: rect.cy};
   }
 
   applyTo(canvas, toTime, intf) {
@@ -195,6 +329,19 @@ export class Objects {
     }
   }
 
+  liveObjects(time) {
+    let timeKey = toKey(time);
+    let result = [];
+
+    for (let k in this.objects) {
+      let obj = this.get(time, k);
+      if (obj) {
+        result.push(obj);
+      }
+    }
+    return result;
+  }
+
   undo(id, time) {
     let obj = this.get(time, id);
     return obj.undo();
@@ -230,9 +377,15 @@ export class Action {
       }
     } else if (this.type === 'addObject') {
       objects.addObject(model.now, this.info);
-    } else if (this.type === 'finishReframeBitmap') {
-      let bitmap = objects.objects[this.info.objectId].object;
-      bitmap.add(model.now, this.info);
+    } else if (this.type === 'finishReframe') {
+      let obj = objects.objects[this.info.objectId].object;
+      let last = obj.last(model.now);
+      let moveId = newId();
+      obj.add(model.now, {message: 'firstReframe', moveId, name: last.name, width: last.width, height: last.height});
+      obj.addTransform(model.now, {message: 'firstReframe', moveId, transform: this.info.oldTransform});
+      obj.add(model.now, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
+      
+      obj.addTransform(model.now, {message: 'reframe', transform: this.info.newTransform});
     }
   }
 
@@ -244,9 +397,9 @@ export class Action {
       }
     } else if (this.type === 'addObject') {
       objects.undoAddObject(this.info);
-    } else if (this.type === 'finishReframeBitmap') {
-      let bitmap = objects.objects[this.info.objectId].object;
-      bitmap.undo();
+    } else if (this.type === 'finishReframe') {
+      let obj = objects.objects[this.info.objectId].object;
+      obj.undo(model.now);
     }
   }
 }
