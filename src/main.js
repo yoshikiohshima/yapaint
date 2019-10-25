@@ -5,7 +5,7 @@ import * as Croquet from '@croquet/croquet';
 import {load} from './bitmap.js';
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
 
-let isLocal = false;
+let isLocal = true;
 let session;
 
 let bitmaps;
@@ -250,6 +250,7 @@ class DrawingModel extends M {
       'removeBitmap': 'removeBitmap',
       'color': 'color',
       'clear': 'clear',
+      'delete': 'delete',
       'undo': 'undo',
       'redo': 'redo',
       'select': 'select',
@@ -340,7 +341,7 @@ class DrawingModel extends M {
     obj.addTransform(this.now, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
     this.objects.addObject(this.now, obj);
     this.history.push(new Action('addObject', obj));
-    return info;
+    return {message: 'updateScreen'};
   }
 
   reframe(info) {
@@ -367,19 +368,29 @@ class DrawingModel extends M {
     if (!obj) {return;} // it is possible that another client just has cleared this object
     
     this.addSelection(userId, obj);
-    return info;
+    return {message: 'select', dontUpdateButtons: true};
   }
 
   unselect(info) {
     this.removeSelection(info.userId);
-    return info;
+    return {message: 'select', dontUpdateButtons: true};
   }
 
   clear(info) {
     let undo = this.objects.killObjects(this.now);
     this.history.push(new Action('clear', undo));
     this.removeSelection();
-    return info;
+    return {message: 'updateScreen'};
+  }
+
+  delete(info) {
+    let obj = this.selections[info.userId];
+    if (!obj) {return undefined;}
+
+    let undo = this.objects.killObject(this.now, obj.id);
+    this.history.push(new Action('clear', undo));
+    this.removeSelection();
+    return {message: 'updateScreen'};
   }
 
   undo(info) {
@@ -388,7 +399,7 @@ class DrawingModel extends M {
     this.redoHistory.push(action);
     action.undo(this);
     this.removeSelection();
-    return info;
+    return {message: 'updateScreen'};
   }
 
   redo(info) {
@@ -397,7 +408,7 @@ class DrawingModel extends M {
     action.redo(this);
     this.history.push(action);
     this.removeSelection();
-    return info;
+    return {message: 'updateScreen'};
   }
 
   clock(info) {
@@ -515,6 +526,7 @@ class DrawingView extends V {
       'mouseDown': 'mouseDown',
       'mouseMove': 'mouseMove',
       'mouseUp': 'mouseUp',
+      'keyboard': 'keyboard',
       'beginStroke': 'beginStroke',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
@@ -527,14 +539,9 @@ class DrawingView extends V {
       'addBitmapPressed': 'addBitmapPressed',
       'addBitmapSelected': 'addBitmapSelected',
       'clock': 'clock',
-      'clear': 'clear',
-      'undo': 'undo',
-      'redo': 'redo',
-      'addBitmap': 'addBitmap',
+      'updateScreen': 'updateScreen',
       'reframe': 'reframe',
       'finishReframe': 'finishReframe',
-      'select': 'select',
-      'unselect': 'unselect',
       'toggleGoStop': 'toggleGoStop',
       'load': 'load',
       'configure': 'configure',
@@ -551,6 +558,8 @@ class DrawingView extends V {
         {message: 'mouseMove'}, this.cookEvent(evt))),
       mouseup: (evt) => this.dispatch(Object.assign(
         {message: 'mouseUp'}, this.cookEvent(evt))),
+      keyboard: (evt) => this.dispatch(Object.assign(
+        {message: 'keyboard'}, this.cookEvent(evt))),
       clearHandler: (evt) => this.dispatch({message: 'clearPressed'}),
       colorHandler: (evt) => this.setColor(evt.target.id),
       timeHandler: (evt) => this.dispatch(
@@ -564,9 +573,14 @@ class DrawingView extends V {
     };
 
     this.elements = {};
-    ['canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => this.elements[n] = this.content.querySelector('#' +  n));
+    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+      this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
+    });
 
     this.handlerMap = [
+      ['body', 'keypress', 'keyboard'],
+      ['body', 'keydown', 'keyboard'],
+      ['body', 'input', 'keyboard'],
       ['canvas', 'mousedown', 'mousedown'],
       ['canvas', 'mousemove', 'mousemove'],
       ['canvas', 'mouseup', 'mouseup'],
@@ -604,7 +618,7 @@ class DrawingView extends V {
 
   cookEvent(evt) {
     return {touches: evt.touches, screenX: evt.screenX, screenY: evt.screenY,
-            offsetX: evt.offsetX, offsetY: evt.offsetY, shiftKey: evt.shiftKey};
+            offsetX: evt.offsetX, offsetY: evt.offsetY, shiftKey: evt.shiftKey, key: evt.key};
   }
 
   async dispatch(arg) {
@@ -726,6 +740,12 @@ class DrawingView extends V {
     }
   }
 
+  keyboard(evt) {
+    if (evt.key === "Backspace" || evt.key === "Delete") {
+      return {message: "delete", userId: this.viewId};
+    }
+  }
+
   drawFrames(intf) {
     for (let k in this.model.selections) {
       let obj = this.model.selections[k];
@@ -793,13 +813,6 @@ class DrawingView extends V {
     return undefined;
   }
 
-  addBitmap(info) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-    this.updateButtons();
-  }
-
   reframe(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
@@ -810,40 +823,17 @@ class DrawingView extends V {
     this.updateButtons();
   }
 
-  clear() {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-  }
-
-  select(info) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-  }
-
-  unselect(info) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-  }
-
   timeChanged(arg) {
     return Object.assign(arg, {message: 'seek', time: arg.time});
   }
 
   clock(obj) {
     // this method is called only when the model got a new clock
-    let intf = new Interface();
-    // this.model.commands.leave(this.model.now, this.canvas, this.cache);
-
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-
+    this.updateScreen();
+    
     this.elements.time.valueAsNumber = this.model.now;
     this.elements.readout.textContent = this.model.now.toFixed(2);
     this.toggleGoStop();
-    this.updateButtons();
   }
 
   toggleGoStop() {
@@ -862,20 +852,13 @@ class DrawingView extends V {
     this.cache.resetFor(this.canvas);
   }
 
-  undo(obj) {
+  updateScreen(info) {
     let intf = new Interface();
     this.model.objects.applyTo(this.canvas, this.model.now, intf);
     this.drawFrames(intf);
-    this.updateButtons();
-    this.mySelection = null;
-  }
-
-  redo(obj) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-    this.mySelection = null;
-    this.updateButtons();
+    if (!info.dontUpdateButtons) {
+      this.updateButtons();
+    }
   }
 
   updateButtons() {
@@ -900,7 +883,7 @@ async function start() {
     session = makeMockReflector(DrawingModel, DrawingView);
     return Promise.resolve('local');
   } else {
-    session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: 30});
+    session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: 1});
     return Promise.resolve('remote');
   }
 }

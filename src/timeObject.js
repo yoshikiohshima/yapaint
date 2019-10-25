@@ -449,6 +449,15 @@ export class Objects {
     return undo;
   }
 
+  killObject(time, objectId) {
+    let timeKey = toKey(time);
+    let undo = {};
+    let info = this.objects[objectId];
+    undo[objectId] = {oldTo: info.to, newTo: timeKey};
+    info.to = timeKey;
+    return undo;
+  }
+
   applyTo(canvas, time, intf) {
     intf.clear(canvas);
     this.liveObjectsDo(time, (obj) => obj.applyTo(canvas, time, intf));
@@ -473,9 +482,9 @@ export class Action {
       let obj = objects.objects[this.info.objectId].object;
       let last = obj.get(model.now);
       let moveId = newId();
-      obj.add(model.now, {message: 'firstReframe', moveId, name: last.name, width: last.width, height: last.height});
+      obj.add(model.now, {message: 'firstReframe', moveId, width: last.width, height: last.height});
       obj.addTransform(model.now, {message: 'firstReframe', moveId, transform: this.info.oldTransform});
-      obj.add(model.now, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
+      obj.add(model.now, {message: 'finishReframe', width: last.width, height: last.height});
       
       obj.addTransform(model.now, {message: 'reframe', transform: this.info.newTransform});
     }
