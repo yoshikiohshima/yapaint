@@ -112,32 +112,6 @@ function makeMockReflector(modelClass, viewClass) {
 
 class Interface {
 
-  compose(o, t) {
-    let result = new Array(6);
-
-    result[0] = o[0] * t[0] + o[1] * t[3];
-    result[1] = o[0] * t[1] + o[1] * t[4];
-    result[2] = o[0] * t[2] + o[1] * t[5] + o[2];
-
-    result[3] = o[3] * t[0] + o[4] * t[3];
-    result[4] = o[3] * t[1] + o[4] * t[4];
-    result[5] = o[3] * t[2] + o[4] * t[5] + o[5];
-
-    return result;
-  }
-
-  transformPoint(t, x, y) {
-    return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
-  }
-
-  invertPoint(t, x, y) {
-    let det = 1 / (t[0] * t[4] - t[1] * t[3]);
-
-    let n = [det * t[4], det * -t[1], -t[2], det * -t[3], det * -t[0], -t[5]];
-
-    return this.transformPoint(n, x, y);
-  }
-
   newSegment(canvas, obj, transform) {
     let {x0, y0, x1, y1, color} = obj;
     let ctx = canvas.getContext('2d');
@@ -177,17 +151,12 @@ class Interface {
     ctx.lineWidth = 4;
     ctx.strokeStyle = '#b1b1bf8c';
 
-    let t0 = this.transformPoint(transform, info.ox || 0, info.oy || 0);
+    let t0 = Transform.transformPoint(transform, info.ox || 0, info.oy || 0);
     let t1;
 
-    if (info.cx !== undefined) {
-      t1 = this.transformPoint(transform, info.cx, info.cy);
-    } else {
-      t1 = this.transformPoint(transform, info.width, info.height);
-    }
+    t1 = Transform.transformPoint(transform, info.cx || info.width || 0, info.cy || info.height || 0);
     
     // ctx.save();
-
     // ctx.transform(t[0], t[3], t[1], t[4], t[2], t[5]);
     
     ctx.beginPath();
@@ -201,8 +170,8 @@ class Interface {
     let width = info.width;
     let height = info.height;
 
-    let t0 = this.transformPoint(transform, info.ox || 0, info.oy || 0);
-    let t1 = this.transformPoint(transform, info.cx || width, info.cy || height);
+    let t0 = Transform.transformPoint(transform, info.ox || 0, info.oy || 0);
+    let t1 = Transform.transformPoint(transform, info.cx || width || 0 , info.cy || height || 0);
 
     for (let k in resizers) {
       let handle = resizers[k];
@@ -870,20 +839,6 @@ class DrawingView extends V {
     return Object.assign({}, info, {message: 'reframe'});
   }
 
-  compose(o, t) {
-    let result = new Array(6);
-
-    result[0] = o[0] * t[0] + o[1] * t[3];
-    result[1] = o[0] * t[1] + o[1] * t[4];
-    result[2] = o[0] * t[2] + o[1] * t[5] + o[2];
-
-    result[3] = o[3] * t[0] + o[4] * t[3];
-    result[4] = o[3] * t[1] + o[4] * t[4];
-    result[5] = o[3] * t[2] + o[4] * t[5] + o[5];
-
-    return result;
-  }
-
   transformPoint(t, x, y) {
     return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
   }
@@ -905,16 +860,16 @@ class DrawingView extends V {
 
       let transform = [sx, 0, 0, 0, sy, 0];
 
-      let ox = data.origRect.ox;
-      let oy = data.origRect.oy;
+      let ox = data.origRect.ox || 0;
+      let oy = data.origRect.oy || 0;
 
-      let newTransform = this.compose(oldTransform, transform);
+      let newTransform = Transform.compose(oldTransform, transform);
 
       newTransform[2] = 0;
       newTransform[5] = 0;
 
-      let op = this.transformPoint(oldTransform, ox, oy);
-      let tp = this.transformPoint(newTransform, ox, oy);
+      let op = Transform.transformPoint(oldTransform, ox, oy);
+      let tp = Transform.transformPoint(newTransform, ox, oy);
 
       newTransform[2] = - tp.x + op.x;
       newTransform[5] = - tp.y + op.y;

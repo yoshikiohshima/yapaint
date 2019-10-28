@@ -65,6 +65,32 @@ export class Transform {
 
   static rotate(time, theta) {}
 
+  static compose(o, t){
+    let result = new Array(6);
+
+    result[0] = o[0] * t[0] + o[1] * t[3];
+    result[1] = o[0] * t[1] + o[1] * t[4];
+    result[2] = o[0] * t[2] + o[1] * t[5] + o[2];
+
+    result[3] = o[3] * t[0] + o[4] * t[3];
+    result[4] = o[3] * t[1] + o[4] * t[4];
+    result[5] = o[3] * t[2] + o[4] * t[5] + o[5];
+
+    return result;
+  }
+
+  static transformPoint(t, x, y) {
+    return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
+  }
+
+  static invertPoint(t, x, y) {
+    let det = 1 / (t[0] * t[4] - t[1] * t[3]);
+
+    let n = [det * t[4], det * -t[1], -t[2], det * -t[3], det * -t[0], -t[5]];
+
+    return this.transformPoint(n, x, y);
+  }
+
   constructor() {
     let m1 = toKey(-1);
     this.keys = [m1];
