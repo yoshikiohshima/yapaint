@@ -4,6 +4,7 @@ import * as Croquet from '@croquet/croquet';
 
 import {load} from './bitmap.js';
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
+import {dragger} from './dragger.js';
 
 let isLocal = true;
 let session;
@@ -110,6 +111,33 @@ function makeMockReflector(modelClass, viewClass) {
 }
 
 class Interface {
+
+  compose(o, t) {
+    let result = new Array(6);
+
+    result[0] = o[0] * t[0] + o[1] * t[3];
+    result[1] = o[0] * t[1] + o[1] * t[4];
+    result[2] = o[0] * t[2] + o[1] * t[5] + o[2];
+
+    result[3] = o[3] * t[0] + o[4] * t[3];
+    result[4] = o[3] * t[1] + o[4] * t[4];
+    result[5] = o[3] * t[2] + o[4] * t[5] + o[5];
+
+    return result;
+  }
+
+  transformPoint(t, x, y) {
+    return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
+  }
+
+  invertPoint(t, x, y) {
+    let det = 1 / (t[0] * t[4] - t[1] * t[3]);
+
+    let n = [det * t[4], det * -t[1], -t[2], det * -t[3], det * -t[0], -t[5]];
+
+    return this.transformPoint(n, x, y);
+  }
+
   newSegment(canvas, obj, transform) {
     let {x0, y0, x1, y1, color} = obj;
     let ctx = canvas.getContext('2d');
@@ -119,11 +147,12 @@ class Interface {
     ctx.lineWidth = color === 'white' ? 6 : 2;
 
     ctx.save();
-
     ctx.transform(transform[0], transform[3], transform[1], transform[4], transform[2], transform[5]);
+
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
+
     ctx.stroke();
 
     ctx.restore();
@@ -131,10 +160,6 @@ class Interface {
 
   clear(canvas) {
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  emptyImageData(width, height) {
-    return new ImageData(width, height).data;
   }
 
   drawBitmap(canvas, name, info) {
@@ -147,19 +172,49 @@ class Interface {
   }
 
   drawFrame(canvas, info) {
-    let t = info.transform;
+    let transform = info.transform;
     let ctx = canvas.getContext('2d');
     ctx.lineWidth = 4;
     ctx.strokeStyle = '#b1b1bf8c';
 
-    ctx.save();
+    let t0 = this.transformPoint(transform, info.ox || 0, info.oy || 0);
+    let t1;
 
-    ctx.transform(t[0], t[3], t[1], t[4], t[2], t[5]);
+    if (info.cx !== undefined) {
+      t1 = this.transformPoint(transform, info.cx, info.cy);
+    } else {
+      t1 = this.transformPoint(transform, info.width, info.height);
+    }
+    
+    // ctx.save();
+
+    // ctx.transform(t[0], t[3], t[1], t[4], t[2], t[5]);
     
     ctx.beginPath();
-    ctx.rect(info.ox || 0, info.oy || 0, info.width, info.height);
+    ctx.rect(t0.x, t0.y, t1.x - t0.x, t1.y - t0.y);
     ctx.stroke();
-    ctx.restore();
+    //ctx.restore();
+  }
+
+  set4Handles(info, resizers) {
+    let transform = info.transform;
+    let width = info.width;
+    let height = info.height;
+
+    let t0 = this.transformPoint(transform, info.ox || 0, info.oy || 0);
+    let t1 = this.transformPoint(transform, info.cx || width, info.cy || height);
+
+    for (let k in resizers) {
+      let handle = resizers[k];
+      let coord = handle.coord;
+      if (coord.name === 'bottomRight') {
+        handle.style.setProperty("display", "inherit");
+      } else {
+        handle.style.setProperty("display", "none");
+      }
+      handle.style.setProperty("left", t0.x - 4 + (coord.x * (t1.x - t0.x)) + "px");
+      handle.style.setProperty("top", t0.y - 4 + (coord.y * (t1.y - t0.y)) + "px");
+    }
   }
 }
 
@@ -247,8 +302,6 @@ class DrawingModel extends M {
       'addBitmap': 'addBitmap',
       'reframe': 'reframe',
       'finishReframe': 'finishReframe',
-      'removeBitmap': 'removeBitmap',
-      'color': 'color',
       'clear': 'clear',
       'delete': 'delete',
       'undo': 'undo',
@@ -304,7 +357,7 @@ class DrawingModel extends M {
 
   beginStroke(info) {
     this.removeSelection(info.userId);
-    return info;
+    return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   stroke(info) {
@@ -322,16 +375,6 @@ class DrawingModel extends M {
   }
 
   finishStroke(info) {
-    // obj.add(this.now, {
-    //   message: 'finishStroke',
-    //   ox: last.ox,
-    //   oy: last.oy,
-    //   cx: last.cx,
-    //   cy: last.cy,
-    //   height: last.height,
-    //   width: last.width,
-    //   objectId: info.objectId
-    // });
     return info;
   }
 
@@ -349,7 +392,7 @@ class DrawingModel extends M {
     if (!obj) {return;} // it is possible that another client just has cleared this object
 
     obj.reframe(this.now, info);
-    return info;
+    return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   finishReframe(info) {
@@ -368,12 +411,12 @@ class DrawingModel extends M {
     if (!obj) {return;} // it is possible that another client just has cleared this object
     
     this.addSelection(userId, obj);
-    return {message: 'select', dontUpdateButtons: true};
+    return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   unselect(info) {
     this.removeSelection(info.userId);
-    return {message: 'select', dontUpdateButtons: true};
+    return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   clear(info) {
@@ -522,12 +565,13 @@ class DrawingView extends V {
     this.lastPoint = null;
     this.color = 'black';
 
+    this.resizers = {};
+
     this.messages = {
       'mouseDown': 'mouseDown',
       'mouseMove': 'mouseMove',
       'mouseUp': 'mouseUp',
       'keyboard': 'keyboard',
-      'beginStroke': 'beginStroke',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
       'clearPressed': 'clearPressed',
@@ -538,9 +582,9 @@ class DrawingView extends V {
       'redoPressed': 'redoPressed',
       'addBitmapPressed': 'addBitmapPressed',
       'addBitmapSelected': 'addBitmapSelected',
+      'cornerReframe': 'cornerReframe',
       'clock': 'clock',
       'updateScreen': 'updateScreen',
-      'reframe': 'reframe',
       'finishReframe': 'finishReframe',
       'toggleGoStop': 'toggleGoStop',
       'load': 'load',
@@ -573,7 +617,7 @@ class DrawingView extends V {
     };
 
     this.elements = {};
-    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -617,8 +661,11 @@ class DrawingView extends V {
   }
 
   cookEvent(evt) {
-    return {touches: evt.touches, screenX: evt.screenX, screenY: evt.screenY,
-            offsetX: evt.offsetX, offsetY: evt.offsetY, shiftKey: evt.shiftKey, key: evt.key};
+    if (evt.key === undefined) {
+      return {touches: evt.touches, screenX: evt.screenX, screenY: evt.screenY,
+              offsetX: evt.offsetX, offsetY: evt.offsetY, shiftKey: evt.shiftKey, origEvent: evt};
+    }
+    return {key: evt.key, metaKey: evt.metaKey, altKey: evt.altKey, ctrlKey: evt.ctrlKey, shiftKey: evt.shiftKey, origEvent: evt};
   }
 
   async dispatch(arg) {
@@ -742,30 +789,146 @@ class DrawingView extends V {
 
   keyboard(evt) {
     if (evt.key === "Backspace" || evt.key === "Delete") {
+      evt.origEvent.preventDefault();
       return {message: "delete", userId: this.viewId};
+    }
+
+    if (evt.key === 'z' && (evt.metaKey || evt.ctrlKey)) {
+      evt.origEvent.preventDefault();
+      return {message: "undo", userId: this.viewId};
+    }
+    if (evt.key === 'y' && (evt.metaKey || evt.ctrlKey)) {
+      evt.origEvent.preventDefault();
+      return {message: "redo", userId: this.viewId};
     }
   }
 
   drawFrames(intf) {
+
+    for (let k in this.resizers) {
+      for (let j in this.resizers[k]) {
+        this.resizers[k][j].style.setProperty("display", "none");
+      }
+    }
+    
     for (let k in this.model.selections) {
       let obj = this.model.selections[k];
       if (!obj) {continue;}
       let info = obj.getRect(this.model.now);
       intf.drawFrame(this.canvas, info);
+
+      let resizers = this.ensureResizersFor(this.viewId);
+      intf.set4Handles(info, resizers);
     }
   }
 
-  beginStroke(info) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
+  ensureResizersFor(userId) {
+    if (!this.resizers[userId]) {
+      let coords = [
+        {name: 'topLeft', x: 0, y: 0},
+        {name: 'topRight', x: 1, y: 0},
+        {name: 'bottomRight', x: 1, y: 1},
+        {name: 'bottomLeft', x: 0, y: 1}
+      ];
+
+      let resizers = {};
+
+      let data = {};
+
+      let callback = (info) => {
+        if (info.message === "down") {
+          data.left = info.left;
+          data.top = info.top;
+          data.screenX = info.screenX;
+          data.screenY = info.screenY;
+          data.corner = info.target.id;
+          let obj = this.model.selections[userId];
+          let rect = obj.getRect(this.model.now);
+          data.origRect = rect;
+          data.objectId = obj.id;
+        } else if (info.message === "move") {
+          this.resize(info, userId, data);
+        }
+      };
+
+      coords.forEach((coord) => {
+        let div = document.createElement('div');
+        div.classList.add('resizer');
+        div.id = coord.name;
+        div.coord = coord;
+        resizers[div.id] = div;
+        this.elements.resizerPane.appendChild(div);
+        div.addEventListener("mousedown", dragger(callback, coord.name));
+      });
+
+      this.resizers[userId] = resizers;
+    }
+    return this.resizers[userId];
+  }
+
+  cornerReframe(info) {
+    return Object.assign({}, info, {message: 'reframe'});
+  }
+
+  compose(o, t) {
+    let result = new Array(6);
+
+    result[0] = o[0] * t[0] + o[1] * t[3];
+    result[1] = o[0] * t[1] + o[1] * t[4];
+    result[2] = o[0] * t[2] + o[1] * t[5] + o[2];
+
+    result[3] = o[3] * t[0] + o[4] * t[3];
+    result[4] = o[3] * t[1] + o[4] * t[4];
+    result[5] = o[3] * t[2] + o[4] * t[5] + o[5];
+
+    return result;
+  }
+
+  transformPoint(t, x, y) {
+    return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
+  }
+
+  invertPoint(t, x, y) {
+    let det = 1 / (t[0] * t[4] - t[1] * t[3]);
+
+    let n = [det * t[4], det * -t[1], -t[2], det * -t[3], det * -t[0], -t[5]];
+
+    return this.transformPoint(n, x, y);
+  }
+
+  resize(info, userId, data) {
+    if (data.corner === 'bottomRight') {
+      let oldTransform = data.origRect.transform;
+
+      let sx = (data.origRect.width + ((info.screenX - data.screenX) / oldTransform[0])) / data.origRect.width;
+      let sy = (data.origRect.height + ((info.screenY - data.screenY) / oldTransform[4])) / data.origRect.height;
+
+      let transform = [sx, 0, 0, 0, sy, 0];
+
+      let ox = data.origRect.ox;
+      let oy = data.origRect.oy;
+
+      let newTransform = this.compose(oldTransform, transform);
+
+      newTransform[2] = 0;
+      newTransform[5] = 0;
+
+      let op = this.transformPoint(oldTransform, ox, oy);
+      let tp = this.transformPoint(newTransform, ox, oy);
+
+      newTransform[2] = - tp.x + op.x;
+      newTransform[5] = - tp.y + op.y;
+
+      this.dispatch({message: 'cornerReframe',
+                     firstReframe: false,
+                     transform: newTransform,
+                     objectId: data.objectId, userId});
+    }
   }
 
   stroke(info) {
     if (VIEW_EARLY_DRAW && info.userId === this.viewId) {return;}
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
+    this.screenUpdate({dontUpdateButtons: true});
   }
 
   finishStroke(info) {
@@ -813,12 +976,6 @@ class DrawingView extends V {
     return undefined;
   }
 
-  reframe(info) {
-    let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
-    this.drawFrames(intf);
-  }
-
   finishReframe(info) {
     this.updateButtons();
   }
@@ -829,7 +986,7 @@ class DrawingView extends V {
 
   clock(obj) {
     // this method is called only when the model got a new clock
-    this.updateScreen();
+    this.updateScreen({});
     
     this.elements.time.valueAsNumber = this.model.now;
     this.elements.readout.textContent = this.model.now.toFixed(2);
@@ -848,6 +1005,8 @@ class DrawingView extends V {
 
     this.elements.backstop.style.setProperty("width", width + "px");
     this.elements.backstop.style.setProperty("height", height + "px");
+    this.elements.resizerHolder.style.setProperty("width", width + "px");
+    this.elements.resizerHolder.style.setProperty("height", height + "px");
 
     this.cache.resetFor(this.canvas);
   }

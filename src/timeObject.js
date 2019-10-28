@@ -135,7 +135,7 @@ export class Bitmap {
     this.keys = [m1];
     this.data = new Map();
     this.data.set(m1, [{name, width, height}]);
-    // this.data {name, width, height}
+    // this.data {name, width, height}, in the inherent size
   }
 
   addTransform(time, transform) {
@@ -162,6 +162,7 @@ export class Bitmap {
   }
 
   includesPoint(time, x, y) {
+    // get the current values, and test the screen point in the transformed local coorinate
     let last = this.get(time);
     if (!last) {return false;}
     let o = this.transform.transformPoint(time, 0, 0);
@@ -250,7 +251,7 @@ export class Stroke {
     this.transform = new Transform();
     this.keys = [];
     this.data = new Map();
-    // this.data {x0, y0, x1, y1, lineWidth, color, ox, oy, width, height}
+    // this.data {x0, y0, x1, y1, lineWidth, color, ox, oy, width, height}  // all in local
     //           | reframe
   }
 
@@ -461,6 +462,14 @@ export class Objects {
   applyTo(canvas, time, intf) {
     intf.clear(canvas);
     this.liveObjectsDo(time, (obj) => obj.applyTo(canvas, time, intf));
+  }
+
+  some(time) {
+    let result = this.liveObjects(time);
+    if (result.length > 0) {
+      return result[0];
+    }
+    return null;
   }
 }
 

@@ -30,6 +30,24 @@
     width: 45px;
 }
 
+.resizer {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background-color: #111111;
+}
+
+.resizerPane {
+    position: absolute;
+    width: 0px;
+    height: 0px;
+}
+
+.resizerHolder {
+    position: absolute;
+    background-color: #11111111;
+}
+
 .trash {
   background-repeat: no-repeat;
   background-position: center;
