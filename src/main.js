@@ -1151,7 +1151,7 @@ class DrawingView extends V {
     this.lastTimingCheck = now;
     
     let expectedTime = this.videoView.wrappedTime(this.calculateVideoTime(now, this.model.startTime), true, this.videoView.video.duration);
-    const videoTime = this.videoview.video.currentTime;
+    const videoTime = this.videoView.video.currentTime;
     const videoDiff = videoTime - expectedTime;
     const videoDiffMS = videoDiff * 1000; // +ve means *ahead* of where it should be
     // otherwise presumably measured across a loop restart; just ignore.
