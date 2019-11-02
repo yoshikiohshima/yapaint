@@ -35,5 +35,3 @@ export function load() {
     return result;
   })
 }
-    
-  

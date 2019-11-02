@@ -5,19 +5,22 @@ import * as Croquet from '@croquet/croquet';
 import {load} from './bitmap.js';
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
 import {dragger} from './dragger.js';
+import {AssetManager} from './assetManager.js';
 
 let isLocal = true;
 let session;
 
-let bitmaps;
-async function getBitmaps() {
-  if (!bitmaps) {
-    bitmaps = await load();
-  }
-  return bitmaps;
-}
+// let bitmaps;
+// async function getBitmaps() {
+//   if (!bitmaps) {
+//     bitmaps = await load();
+//   }
+//   return bitmaps;
+// }
 
-const VIEW_EARLY_DRAW = true;
+let bitmaps = {};
+
+const VIEW_EARLY_DRAW = false;
 
 class FutureHandler {
   constructor(tOffset) {
@@ -46,6 +49,7 @@ class MockModel {
 
   constructor() {
     this.id = 'abc';
+    this.start = Date.now();
   }
   init() {}
   subscribe() {}
@@ -58,14 +62,24 @@ class MockModel {
   future(tOffset = 0) {
     return new FutureHandler(tOffset).setup(this);
   }
+
+  now() {
+    return Date.now() - this.start;
+  }
 }
 
 class MockView {
   constructor(model) {
     this.id = 'def';
     this.viewId = this.id;
+
+    this.start = Date.now();
   }
   subscribe() {}
+
+  now() {
+    return Date.now() - this.start;
+  }
 }
 
 let M = isLocal ? MockModel : Croquet.Model;
@@ -256,8 +270,11 @@ class DrawingModel extends M {
   init() {
     this.objects = new Objects(newId());
 
-    this.now = 0;
-    this.playing = false;
+    this.isPlaying = false;
+    this.hasVideo = false;
+    this.startTime = null;
+    this.pausedTime = null;
+    
     this.canvasExtent = {width: 500, height: 500};
 
     this.history = [];
@@ -265,6 +282,7 @@ class DrawingModel extends M {
     this.selections = {};
 
     this.messages = {
+      'render': 'render',
       'beginStroke': 'beginStroke',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
@@ -281,15 +299,21 @@ class DrawingModel extends M {
       'load': 'load',
       'clock': 'clock',
       'seek': 'seek',
-      'toggleGoStop': 'toggleGoStop',
       'configure': 'configure',
+      'addImage': 'addImage',
+      'loadImage': 'loadImage',
+      'addVideo': 'addVideo',
+      'loadVideo': 'loadVideo',
+      'togglePlayState': 'togglePlayState',
+      'setPlayState': 'setPlayState',
+      'updateTime': 'updateTime',
     };
 
     this.subscribe(this.sessionId, "view-join", this.viewJoin);
     this.subscribe(this.sessionId, "view-exit", this.viewExit);
 
     this.subscribe(this.id, "message", this.dispatch);
-    this.future(50).tick();
+    // this.future(0).tick();
     window.model = this;
   }
 
@@ -319,10 +343,14 @@ class DrawingModel extends M {
   }
 
   viewJoin(viewId) {
-    getBitmaps();
+    // getBitmaps();
   }
 
   viewExit(viewId) {}
+
+  render() {
+    return {message: 'updateScreen'}
+  }
 
   beginStroke(info) {
     this.removeSelection(info.userId);
@@ -330,16 +358,16 @@ class DrawingModel extends M {
   }
 
   stroke(info) {
-    let obj = this.objects.get(this.now, info.objectId);
+    let obj = this.objects.get(info.time, info.objectId);
 
     if (!obj) {
       obj = new Stroke(info.objectId);
-      obj.addTransform(this.now, {message: 'new', transform: [1, 0, 0, 0, 1, 0]});
-      this.objects.addObject(this.now, obj);
+      obj.addTransform(info.time, {message: 'new', transform: [1, 0, 0, 0, 1, 0]});
+      this.objects.addObject(info.time, obj);
       this.history.push(new Action('addObject', obj));
     }
     
-    obj.add(this.now, info);
+    obj.add(info.time, info);
     return info;
   }
 
@@ -350,32 +378,32 @@ class DrawingModel extends M {
   addBitmap(info) {
     this.removeSelection(info.userId);
     let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
-    obj.addTransform(this.now, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
-    this.objects.addObject(this.now, obj);
+    obj.addTransform(info.time, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
+    this.objects.addObject(info.time, obj);
     this.history.push(new Action('addObject', obj));
     return {message: 'updateScreen'};
   }
 
   reframe(info) {
-    let obj = this.objects.get(this.now, info.objectId);
+    let obj = this.objects.get(info.time, info.objectId);
     if (!obj) {return;} // it is possible that another client just has cleared this object
 
-    obj.reframe(this.now, info);
+    obj.reframe(info.time, info);
     return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   finishReframe(info) {
-    let obj = this.objects.get(this.now, info.objectId);
+    let obj = this.objects.get(info.time, info.objectId);
     if (!obj) {return;}
 
-    let action = obj.finishReframe(this.now, info);
+    let action = obj.finishReframe(info.time, info);
     this.history.push(action);
 
     return info;
   }
 
   select(info) {
-    let obj = this.objects.get(this.now, info.objectId);
+    let obj = this.objects.get(info.time, info.objectId);
     let userId = info.userId;
     if (!obj) {return;} // it is possible that another client just has cleared this object
     
@@ -389,7 +417,7 @@ class DrawingModel extends M {
   }
 
   clear(info) {
-    let undo = this.objects.killObjects(this.now);
+    let undo = this.objects.killObjects(info.time);
     this.history.push(new Action('clear', undo));
     this.removeSelection();
     return {message: 'updateScreen'};
@@ -399,7 +427,7 @@ class DrawingModel extends M {
     let obj = this.selections[info.userId];
     if (!obj) {return undefined;}
 
-    let undo = this.objects.killObject(this.now, obj.id);
+    let undo = this.objects.killObject(info.time, obj.id);
     this.history.push(new Action('clear', undo));
     this.removeSelection();
     return {message: 'updateScreen'};
@@ -409,7 +437,7 @@ class DrawingModel extends M {
     if (this.history.length === 0) {return undefined;}
     let action = this.history.pop();
     this.redoHistory.push(action);
-    action.undo(this);
+    action.undo(this, info.time);
     this.removeSelection();
     return {message: 'updateScreen'};
   }
@@ -417,110 +445,66 @@ class DrawingModel extends M {
   redo(info) {
     if (this.redoHistory.length === 0) {return undefined;}
     let action = this.redoHistory.pop();
-    action.redo(this);
+    action.redo(this, info.time);
     this.history.push(action);
     this.removeSelection();
     return {message: 'updateScreen'};
   }
 
   clock(info) {
-    if (this.now !== info.time) {
-      this.now = info.time;
-      return info;
-    }
-    return undefined;
-  }
-
-  seek(info) {
-    if (this.player) {
-      this.player.seekTo(info.time);
-    } else {
-      return this.clock({message: 'clock', time: info.time});
-    }
-  }
-
-  toggleGoStop(info) {
-    this.playing = !this.playing;
-    if (!this.player) {return info;}
-
-    if (this.playing) {
-      this.player.playVideo();
-    } else {
-      this.player.pauseVideo();
-    }
     return info;
   }
 
-  load(info) {
-    let movieId = info.movieId;
+  setPlayState(info) {
+    let {isPlaying, startTime, pausedTime} = info;
+    if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
+    if (startTime !== undefined) {this.startTime = startTime;}
+    if (pausedTime !== undefined) {this.pausedTime = pausedTime;}
 
-    /* YouTube Javascript API stuff */
-    let tag = document.createElement('script');
-    tag.src = 'http://www.youtube.com/iframe_api';
-    let firstScriptTag = document.getElementsByTagName('script')[0];
-    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-    let firstTime = true;
-
-    window.onYouTubeIframeAPIReady = () => {
-      this.player = new YT.Player('player', {
-        height: '576',
-        width:  '1024',
-        videoId: movieId,
-        events: {
-          'onStateChange': onPlayerStateChange,
-          'onReady': onPlayerReady,
-        },
-        playerVars: {rel: 0, showinfo: 0},
-      });
-    };
-
-    let callback = () => {
-      if (!this.player) {return;}
-      this.now = parseFloat(this.player.getCurrentTime());
-      this.dispatch({message: 'clock', time: this.now});
-    };
-
-    let onPlayerReady = () => {
-      console.log("player ready");
-      this.dispatch({message: "configure", width: 1024, height: 576, length: this.player.getDuration()});
-    };
-
-    let onPlayerStateChange = (e) => {
-      if (e.data === YT.PlayerState.PLAYING) {
-        this.interval = window.setInterval(callback, 100); // update every 1/10th second
-      }
-      if (e.data === YT.PlayerState.ENDED  ||
-          e.data === YT.PlayerState.PAUSED ||
-          e.data === YT.PlayerState.BUFFERING) {
-        window.clearInterval(this.interval);
-      }
-    };
-
-    return {message: 'load', width: 1024, height: 576};
+    return {message: 'updateScreen'};
   }
 
   configure(info) {
     let {width, height} = info;
     this.canvasExtent = {width, height};
 
-    //cache.resetFor(modelCanvas);
     this.objects = new Objects(newId());
     return info;
   }
 
-  tick() {
-    this.future(50).tick();
-    if (!this.playing) {
-      return;
-    }
+  addImage(info) {
+    return {message: 'loadImage', assetDescriptor: info.assetDescriptor};
+  }
 
-    let newTime = this.now + 0.05;
-    if (newTime >= 20) {
-      newTime = 20;
-      this.playing = false;
+  loadImage(info) {
+    this.removeSelection(info.userId);
+    let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
+    obj.addTransform(info.time, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
+    this.objects.addObject(info.time, obj);
+    this.history.push(new Action('addObject', obj));
+    return {message: 'updateScreen'};
+    
+  }
+
+  addVideo(info) {
+    return {message: 'loadVideo', assetDescriptor: info.assetDescriptor};
+  }
+
+  togglePlayState(info) {
+    let now = info.time;
+
+    this.isPlaying = !this.isPlaying;
+    if (this.isPlaying) {
+      this.startTime = info.startTime;
+      this.pausedTime = null;
+    } else {
+      this.startTime = null;
+      this.pausedTime = now;
     }
-    this.dispatch({message: 'clock', time: newTime});
+    return info;
+  }
+
+  tick() {
   }
 }
 
@@ -533,7 +517,8 @@ class DrawingView extends V {
     this.modelId = model.id;
     this.lastPoint = null;
     this.color = 'black';
-
+    this.videoTime = 0;
+    
     this.resizers = {};
 
     this.messages = {
@@ -541,6 +526,7 @@ class DrawingView extends V {
       'mouseMove': 'mouseMove',
       'mouseUp': 'mouseUp',
       'keyboard': 'keyboard',
+      'assetsDrop': 'assetsDrop',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
       'clearPressed': 'clearPressed',
@@ -555,9 +541,14 @@ class DrawingView extends V {
       'clock': 'clock',
       'updateScreen': 'updateScreen',
       'finishReframe': 'finishReframe',
-      'toggleGoStop': 'toggleGoStop',
       'load': 'load',
       'configure': 'configure',
+      'addAsset': 'addAsset',
+      'loadImage': 'loadImage',
+      'loadVideo': 'loadVideo',
+      'togglePlayState': 'togglePlayState',
+      'setPlayState': 'setPlayState',
+      'render': 'render',
     };
 
     this.subscribe(this.modelId, "message-m", this.dispatch);
@@ -573,6 +564,8 @@ class DrawingView extends V {
         {message: 'mouseUp'}, this.cookEvent(evt))),
       keyboard: (evt) => this.dispatch(Object.assign(
         {message: 'keyboard'}, this.cookEvent(evt))),
+      drop: (evt) => this.drop(this.dropEvent(evt)),
+      drag: (evt) => this.drag(evt),
       clearHandler: (evt) => this.dispatch({message: 'clearPressed'}),
       colorHandler: (evt) => this.setColor(evt.target.id),
       timeHandler: (evt) => this.dispatch(
@@ -597,6 +590,10 @@ class DrawingView extends V {
       ['canvas', 'mousedown', 'mousedown'],
       ['canvas', 'mousemove', 'mousemove'],
       ['canvas', 'mouseup', 'mouseup'],
+      ['canvas', 'drop', 'drop'],
+      ['canvas', 'dragenter', 'drag'],
+      ['canvas', 'dragover', 'drag'],
+      ['canvas', 'dragleave', 'drag'],
       ['clearButton', 'click', 'clearHandler'],
       ['black', 'click', 'colorHandler'],
       ['blue', 'click', 'colorHandler'],
@@ -608,8 +605,8 @@ class DrawingView extends V {
       ['undoButton', 'click', 'undoHandler'],
       ['redoButton', 'click', 'redoHandler'],
       ['loadButton', 'click', 'loadHandler'],
-      ['addBitmapButton', 'click', 'addBitmapHandler'],
-      ['addBitmapChoice', 'change', 'addBitmapSelectedHandler'],
+      // ['addBitmapButton', 'click', 'addBitmapHandler'],
+      // ['addBitmapChoice', 'change', 'addBitmapSelectedHandler'],
     ];
 
     this.handlerMap.forEach((triple) => {
@@ -621,12 +618,19 @@ class DrawingView extends V {
 
     this.elements.undoButton.classList.add('disabled');
     this.elements.redoButton.classList.add('disabled');
+
+    this.assetManager = new AssetManager();
   }
 
   detach() {
     this.handlerMap.forEach((triple) => {
       this.elements[triple[0]].removeEventListener(triple[1], this.handlers[triple[2]]);
     });
+  }
+
+  dropEvent(evt) {
+    evt.preventDefault();
+    return {dataTransfer: evt.dataTransfer, origEvent: evt, clientX: evt.clientX, clientY: evt.clientY};
   }
 
   cookEvent(evt) {
@@ -657,17 +661,17 @@ class DrawingView extends V {
 
     let {x, y, shiftKey, userId} = this.lastPoint;
     let mySelection = this.model.selections[userId];
-    let newClick = this.model.objects.liveObjects(this.model.now).find(obj => {
-      return obj.includesPoint(this.model.now, x, y); // && not selected by others
+    let newClick = this.model.objects.liveObjects(this.model.time).find(obj => {
+      return obj.includesPoint(this.model.time, x, y); // && not selected by others
     });
 
     if (mySelection) {
       if (newClick) {
         if (mySelection === newClick) {
           if (shiftKey) {
-            return {message: 'unselect', userId};
+            return {message: 'unselect', userId, time: this.videoTime};
           } else {
-            let info = newClick.getRect(this.model.now);
+            let info = newClick.getRect(this.model.time);
             let transform = info.transform;
             this.moveSelection = {objectId: newClick.id, ...info};
             this.movePoint = {origX: transform[2], origY: transform[5], x, y};
@@ -675,28 +679,28 @@ class DrawingView extends V {
         } else { // mySelection !== newClick
           if (shiftKey) {
             // would be multi select
-            return {message: 'unselect', userId};
+            return {message: 'unselect', userId, time: this.videoTime};
           } else {
-            return {message: 'unselect', userId};
+            return {message: 'unselect', userId, time: this.videoTime};
           }
         }
       } else {
-        return {message: 'unselect', userId};
+        return {message: 'unselect', userId, time: this.videoTime};
       }
     } else {
       if (shiftKey) {
         if (newClick) {
-          let info = newClick.getRect(this.model.now);
+          let info = newClick.getRect(this.model.time);
           let transform = info.transform;
           this.moveSelection = {objectId: newClick.id, ...info};
           this.movePoint = {origX: transform[2], origY: transform[5], x, y};
-          return {message: 'select', userId, objectId: newClick.id};
+          return {message: 'select', userId, objectId: newClick.id, time: this.videoTime};
         } else {
           return undefined;
         }
       } else {
         this.strokeId = newId();
-        return {message: 'beginStroke', color: this.color, objectId: this.strokeId};
+        return {message: 'beginStroke', color: this.color, objectId: this.strokeId, time: this.videoTime};
       }
     }
   }
@@ -712,7 +716,8 @@ class DrawingView extends V {
       let stroke = {
         message: 'stroke',
         x0: this.lastPoint.x, y0: this.lastPoint.y,
-        x1: newPoint.x, y1: newPoint.y, color
+        x1: newPoint.x, y1: newPoint.y, color,
+        time: this.videoTime
       };
       if (VIEW_EARLY_DRAW) {
         new Interface(this.model.bitmaps).newSegment(this.canvas, stroke, [1, 0, 0, 0, 1, 0]);
@@ -731,10 +736,12 @@ class DrawingView extends V {
       newTransform[2] = this.movePoint.newX;
       newTransform[5] = this.movePoint.newY;
       
-      return {message: 'reframe',
-              firstReframe,
-              transform: newTransform,
-              objectId, userId};
+      return {
+        message: 'reframe',
+        firstReframe,
+        transform: newTransform,
+        objectId, userId,
+        time: this.videoTime};
     }
     return undefined;
   }
@@ -748,10 +755,10 @@ class DrawingView extends V {
     this.movePoint = null;
     this.strokeId = null;
     if (strokeId) {
-      return {message: 'finishStroke', userId: this.viewId, objectId: strokeId, x: evt.offsetX, y: evt.offsetY};
+      return {message: 'finishStroke', userId: this.viewId, objectId: strokeId, x: evt.offsetX, y: evt.offsetY, time: this.videoTime};
     } else if (moveSelection && movePoint) {
       if (movePoint.newX !== undefined) {
-        return {message: 'finishReframe', ...moveSelection};
+        return {message: 'finishReframe', ...moveSelection, time: this.videoTime};
       }
     }
   }
@@ -759,21 +766,153 @@ class DrawingView extends V {
   keyboard(evt) {
     if (evt.key === "Backspace" || evt.key === "Delete") {
       evt.origEvent.preventDefault();
-      return {message: "delete", userId: this.viewId};
+      return {message: "delete", userId: this.viewId, time: this.videoTime};
     }
 
     if (evt.key === 'z' && (evt.metaKey || evt.ctrlKey)) {
       evt.origEvent.preventDefault();
-      return {message: "undo", userId: this.viewId};
+      return {message: "undo", userId: this.viewId, time: this.videoTime};
     }
     if (evt.key === 'y' && (evt.metaKey || evt.ctrlKey)) {
       evt.origEvent.preventDefault();
-      return {message: "redo", userId: this.viewId};
+      return {message: "redo", userId: this.viewId, time: this.videoTime};
     }
   }
 
-  drawFrames(intf) {
+  drag(evt) {
+    evt.preventDefault();
+  }
 
+  drop(evt) {
+    let isFileDrop = (evt) => {
+      const dt = evt.dataTransfer;
+      for (let i = 0; i < dt.types.length; i++) {
+        if (dt.types[i] === "Files") {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const cRect = this.canvas.getBoundingClientRect();
+    const dropPoint = { x: evt.clientX - cRect.left, y: evt.clientY - cRect.top };
+    if (isFileDrop(evt)) {
+      this.assetManager.handleFileDrop(evt.dataTransfer.items, this.model, this, dropPoint);
+    } else {
+      console.log("unknown drop type");
+    }
+  }
+
+  addAsset(info) {
+    let type = info.assetDescriptor.loadType;
+    if (type === 'image') {
+      return {message: 'addImage', assetDescriptor: info.assetDescriptor, time: this.videoTime};
+    }
+    if (type === 'video') {
+      return {message: 'addVideo', assetDescriptor: info.assetDescriptor, time: this.videoTime};
+    }
+    return undefined;
+  }
+
+  async loadImage(info) {
+    let objURL = await this.assetManager.importImage(info.assetDescriptor);
+    let img;
+    let objectId = newId();
+    await new Promise((resolve, reject) => {
+      img = document.createElement('img');
+      img.src = objURL;
+      img.onload = resolve;
+      bitmaps[objURL] = img;
+    });
+    return {
+      message: 'loadImage', name: objURL, objectId, width:
+      img.width, height: img.height,
+      x: info.assetDescriptor.dropPoint.x || 0,
+      y: info.assetDescriptor.dropPoint.y || 0,
+      time: this.videoTime
+    };
+  }
+
+  async loadVideo(info) {
+    let assetDescriptor = info.assetDescriptor;
+    let assetManager = this.assetManager;
+    let okToGo = true; // unless cancelled by another load, or a shutdown
+    //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
+    this.abandonLoad = () => okToGo = false;
+
+    this.playStateChanged({ isPlaying: this.model.isPlaying,
+                            startTime: this.model.startTime,
+                            pausedTime: this.model.pausedTime });
+    // will be stored for now, and may be overridden by messages in a backlog by the time the video is ready
+    
+    await assetManager.ensureAssetsAvailable(assetDescriptor)
+      .then(() => assetManager.importVideo(assetDescriptor, false)) // false => not 3D
+      .then(objectURL => new VideoInterface(objectURL).readyPromise)
+      .then(videoView => {
+        if (!okToGo) {return; }// been cancelled
+        delete this.abandonLoad;
+
+        this.videoView = videoView;
+        this.playbackBoost = 0;
+        this.elements.backstop.appendChild(videoView.video);
+
+        this.applyPlayState();
+        this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
+      })
+      .catch(err => console.error(err));
+    return {message: 'loadVideo', time: this.videoTime}
+  }
+
+  playStateChanged(rawData) {
+    const data = { ...rawData }; // take a copy that we can play with
+    this.latestActionSpec = data.actionSpec; // if any
+    delete data.actionSpec;
+
+    const latest = this.latestPlayState;
+    // ignore if we've heard this one before (probably because we set it locally)
+    if (latest && Object.keys(data).every(key => data[key] === latest[key])) {return;}
+
+    this.latestPlayState = data;
+    this.applyPlayState(); // will be ignored if we're still initialising
+  }
+
+  applyPlayState() {
+    if (!this.videoView) {return;}
+
+    let videoView = this.videoView;
+    let videoElem = videoView.video;
+
+    console.log("apply playState", {...this.latestPlayState});
+    if (!this.latestPlayState.isPlaying) {
+      // this.iconVisible('play', true);
+      // this.iconVisible('enableSound', false);
+      videoView.pause(this.latestPlayState.pausedTime);
+    } else {
+      // this.iconVisible('play', false);
+      videoElem.playbackRate = 1 + this.playbackBoost * 0.01;
+      this.lastRateAdjust = this.now(); // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
+      this.jumpIfNeeded = false;
+      // if the video is blocked from playing, enter a stepping mode in which we move the video forward with successive pause() calls
+      videoView.play(this.calculateVideoTime() + 0.1).then(playStarted => {
+        this.iconVisible('enableSound', !playStarted || videoElem.muted);
+        if (playStarted) {
+          // leave it a little time to stabilise          
+          this.future(250).triggerJumpCheck();
+        } else if (!videoElem.muted) {
+          console.log(`trying with mute`);
+          videoElem.muted = true;
+          this.applyPlayState();
+        } else {
+          console.log(`reverting to stepped display`);
+          this.isStepping = true;
+          this.stepWhileBlocked();
+        }
+      });
+    }
+    if (this.latestActionSpec) {this.revealAction(this.latestActionSpec);}
+  }
+    
+  drawFrames(intf) {
     for (let k in this.resizers) {
       for (let j in this.resizers[k]) {
         this.resizers[k][j].style.setProperty("display", "none");
@@ -783,7 +922,7 @@ class DrawingView extends V {
     for (let k in this.model.selections) {
       let obj = this.model.selections[k];
       if (!obj) {continue;}
-      let info = obj.getRect(this.model.now);
+      let info = obj.getRect(this.model.time);
       intf.drawFrame(this.canvas, info);
 
       let resizers = this.ensureResizersFor(this.viewId);
@@ -812,7 +951,7 @@ class DrawingView extends V {
           data.screenY = info.screenY;
           data.corner = info.target.id;
           let obj = this.model.selections[userId];
-          let rect = obj.getRect(this.model.now);
+          let rect = obj.getRect(this.model.time);
           data.origRect = rect;
           data.objectId = obj.id;
         } else if (info.message === "move") {
@@ -836,19 +975,7 @@ class DrawingView extends V {
   }
 
   cornerReframe(info) {
-    return Object.assign({}, info, {message: 'reframe'});
-  }
-
-  transformPoint(t, x, y) {
-    return {x: t[0] * x + t[1] * y + t[2], y: t[3] * x + t[4] * y + t[5]};
-  }
-
-  invertPoint(t, x, y) {
-    let det = 1 / (t[0] * t[4] - t[1] * t[3]);
-
-    let n = [det * t[4], det * -t[1], -t[2], det * -t[3], det * -t[0], -t[5]];
-
-    return this.transformPoint(n, x, y);
+    return Object.assign({}, info, {message: 'reframe', time: this.videoTime});
   }
 
   resize(info, userId, data) {
@@ -877,21 +1004,23 @@ class DrawingView extends V {
       this.dispatch({message: 'cornerReframe',
                      firstReframe: false,
                      transform: newTransform,
-                     objectId: data.objectId, userId});
+                     objectId: data.objectId, userId, time: this.videoTime});
     }
   }
 
   stroke(info) {
     if (VIEW_EARLY_DRAW && info.userId === this.viewId) {return;}
-    this.screenUpdate({dontUpdateButtons: true});
+    this.updateScreen({dontUpdateButtons: true});
   }
 
   finishStroke(info) {
     this.updateButtons();
   }
 
-  goStopPressed(arg) {
-    return {message: 'toggleGoStop'};
+  goStopPressed(info) {
+    let now = this.now();
+    let newPlaying = !this.model.isPlaying;
+    return {message: 'togglePlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime};
   }
 
   setColor(name) {
@@ -899,19 +1028,19 @@ class DrawingView extends V {
   }
 
   loadPressed(arg) {
-    return {message: 'load', movieId: this.movieId.textContent};
+    return {message: 'load', movieId: this.movieId.textContent, time: this.videoTime};
   }
 
   clearPressed(arg) {
-    return {message: 'clear'};
+    return {message: 'clear', time: this.videoTime};
   }
 
   undoPressed(arg) {
-    return {message: 'undo'};
+    return {message: 'undo', time: this.videoTime};
   }
 
   redoPressed(arg) {
-    return {message: 'redo'};
+    return {message: 'redo', time: this.videoTime};
   }
 
   addBitmapPressed(evt) {
@@ -922,11 +1051,11 @@ class DrawingView extends V {
     this.elements.addBitmapChoice.style.setProperty("display", "none");
 
     let name = evt.target.value;
-    await getBitmaps();
+    // await getBitmaps();
     let bits = bitmaps[name];
     if (bits) {
       let id = newId();
-      return {message: 'addBitmap', name: name, x: 100, y: 100, width: bits.width, height: bits.height, objectId: id, userId: this.viewId};
+      return {message: 'addBitmap', name: name, x: 100, y: 100, width: bits.width, height: bits.height, objectId: id, userId: this.viewId, time: this.videoTime};
     }
     return undefined;
   }
@@ -935,21 +1064,20 @@ class DrawingView extends V {
     this.updateButtons();
   }
 
-  timeChanged(arg) {
-    return Object.assign(arg, {message: 'seek', time: arg.time});
+  timeChanged(info) {
+    this.videoTime = info.time;
+    let now = this.now() / 1000;
+    return {message: 'setPlayState', startTime: now - this.videoTime};
   }
 
-  clock(obj) {
-    // this method is called only when the model got a new clock
-    this.updateScreen({});
-    
-    this.elements.time.valueAsNumber = this.model.now;
-    this.elements.readout.textContent = this.model.now.toFixed(2);
-    this.toggleGoStop();
-  }
+  togglePlayState(info) {
+    if (!this.videoView) {return;}
 
-  toggleGoStop() {
-    this.elements.goStop.textContent = this.model.playing ? "Stop" : "Go";
+    if (this.model.isPlaying) {
+      this.videoView.play(this.videoTime);
+    } else {
+      this.videoView.pause(this.videoTime);
+    }
   }
 
   configure(obj) {
@@ -962,15 +1090,16 @@ class DrawingView extends V {
     this.elements.backstop.style.setProperty("height", height + "px");
     this.elements.resizerHolder.style.setProperty("width", width + "px");
     this.elements.resizerHolder.style.setProperty("height", height + "px");
-
-    this.cache.resetFor(this.canvas);
   }
 
   updateScreen(info) {
     let intf = new Interface();
-    this.model.objects.applyTo(this.canvas, this.model.now, intf);
+    this.model.objects.applyTo(this.canvas, this.videoTime, intf);
     this.drawFrames(intf);
     if (!info.dontUpdateButtons) {
+      this.elements.goStop.textContent = this.model.isPlaying ? "Stop" : "Go";
+      this.elements.time.valueAsNumber = this.videoTime;
+      this.elements.readout.textContent = this.videoTime.toFixed(2);
       this.updateButtons();
     }
   }
@@ -989,15 +1118,217 @@ class DrawingView extends V {
     }
   }
 
-  update() {}
+  wrappedTime(videoTime, guarded, duration) {
+    if (duration) {
+      while (videoTime > duration) {
+        // videoTime -= duration;
+        let quo = Math.floor(videoTime / duration);
+        videoTime = videoTime -= duration * quo;
+        // assume it's looping, with no gap between plays
+      }
+      if (guarded) {
+        videoTime = Math.min(duration - 0.1, videoTime);
+        // the video element freaks out on being told to seek very close to the end
+      }
+    }
+    return videoTime;
+  }
+
+  calculateVideoTime(now, startTime) {
+    return now / 1000 - startTime;
+  }
+
+  checkPlayStatus(now) {
+    let lastStatusCheck = this.lastStatusCheck || 0;
+    if (now - this.lastStatusCheck <= 100) {return;}
+    this.lastStatusCheck = now;
+    
+    let lastTimingCheck = this.lastTimingCheck || 0;
+    if (!this.videoView.isPlaying || this.videoView.isBlocked
+        || (now - lastTimingCheck <= 500)) {
+      return;
+    }
+    this.lastTimingCheck = now;
+    
+    let expectedTime = this.videoView.wrappedTime(this.calculateVideoTime(now, this.model.startTime), true, this.videoView.video.duration);
+    const videoTime = this.videoview.video.currentTime;
+    const videoDiff = videoTime - expectedTime;
+    const videoDiffMS = videoDiff * 1000; // +ve means *ahead* of where it should be
+    // otherwise presumably measured across a loop restart; just ignore.
+    if (videoDiff > this.videoView.duration / 2) {return;}
+
+    if (this.jumpIfNeeded) {
+      this.jumpIfNeeded = false;
+      // if there's a difference greater than 500ms, try to jump the video to the right place
+      if (Math.abs(videoDiffMS) > 500) {
+        console.log(`jumping video by ${-Math.round(videoDiffMS)}ms`);
+        this.videoView.video.currentTime = this.videoView.wrappedTime(videoTime - videoDiff + 0.1, true); // 0.1 to counteract the delay that the jump itself tends to introduce; true to ensure we're not jumping beyond the last video frame
+      }
+    } else {
+      // every 3s, check video lag/advance, and set the playback rate accordingly.
+      // current adjustment settings:
+      //   > 150ms off: set playback 3% faster/slower than normal
+      //   > 50ms: 1% faster/slower
+      //   < 25ms: normal (i.e., hysteresis between 50ms and 25ms in the same sense)
+      let lastRateAdjust = this.lastRateAdjust || 0;
+      if (now - lastRateAdjust <= 3000) {return;}
+      this.lastRateAdjust = now;
+      
+      let oldBoostPercent = this.playbackBoost;
+      let diffAbs = Math.abs(videoDiffMS), diffSign = Math.sign(videoDiffMS);
+      let desiredBoostPercent = -diffSign * (diffAbs > 150 ? 3 : (diffAbs > 50 ? 1 : 0));
+      if (desiredBoostPercent !== oldBoostPercent) {
+        // apply hysteresis on the switch to boost=0.
+        // for example, if old boost was +ve (because video was lagging),
+        // and videoDiff is -ve (i.e., it's still lagging),
+        // and the magnitude (of the lag) is greater than 25ms,
+        // don't remove the boost yet.
+        const hysteresisBlock = desiredBoostPercent === 0 && Math.sign(oldBoostPercent) === -diffSign && diffAbs >= 25;
+        if (!hysteresisBlock) {
+          this.playbackBoost = desiredBoostPercent;
+          let playbackRate = 1 + this.playbackBoost * 0.01;
+          console.log(`video playback rate: ${playbackRate}`);
+          this.videoView.video.playbackRate = playbackRate;
+        }
+      }
+    }
+  }
+
+  setPlayState(info) {
+    return info;
+  }
+
+  update() {
+    let now = this.now();
+    if (this.videoView) {
+      this.checkPlayStatus(now);
+      this.videoTime = this.videoView.video.currentTime;
+      this.updateScreen({});
+    } else {
+      if (this.model.isPlaying) {
+        this.videoTime = (now / 1000) - this.model.startTime;
+        if (this.videoTime > 20) {
+          this.videoTime = 20;
+          this.dispatch({message: 'setPlayState', isPlaying: false, startTime: null, pauseTime: null});
+          return;
+        }
+        this.updateScreen({});
+      }
+    }
+  }
+
+  render() {
+    return {message: 'render'};
+  }
 }
+
+// VideoInterface is an interface over an HTML video element.
+// its readyPromise resolves once the video is available to play.
+class VideoInterface {
+  constructor(url) {
+    this.url = url;
+    this.video = document.createElement("video");
+    this.video.autoplay = false;
+    this.video.loop = true;
+    this.isPlaying = false;
+    this.isBlocked = false; // unless we find out to the contrary, on trying to play
+
+    this.readyPromise = new Promise(resolve => {
+      this._ready = () => resolve(this);
+    });
+
+    this.video.oncanplay = () => {
+      this.duration = this.video.duration; // ondurationchange is (apparently) always ahead of oncanplay
+      this._ready();
+    };
+
+    this.video.onerror = () => {
+      let err;
+      const errCode = this.video.error.code;
+      switch (errCode) {
+        case 1: err = "video loading aborted"; break;
+        case 2: err = "network loading error"; break;
+        case 3: err = "video decoding failed / corrupted data or unsupported codec"; break;
+        case 4: err = "video not supported"; break;
+        default: err = "unknown video error";
+      }
+      console.log(`Error: ${err} (errorcode=${errCode})`);
+    };
+
+    /* other events, that can help with debugging
+       [ "pause", "play", "seeking", "seeked", "stalled", "waiting" ].forEach(k => { this.video[`on${k}`] = () => console.log(k); });
+    */
+
+    this.video.crossOrigin = "anonymous";
+
+    if (!this.video.canPlayType("video/mp4").match(/maybe|probably/i)) {
+      console.log("apparently can't play video");
+    }
+
+    this.video.src = this.url;
+    this.video.load();
+  }
+
+  width() { return this.video.videoWidth; }
+  height() { return this.video.videoHeight; }
+
+  wrappedTime(videoTime, guarded, duration) {
+    if (duration) {
+      while (videoTime > duration) {
+        videoTime -= duration;
+        // assume it's looping, with no gap between plays
+      }
+      if (guarded) {
+        videoTime = Math.min(duration - 0.1, videoTime);
+        // the video element freaks out on being told to seek very close to the end
+      }
+    }
+    return videoTime;
+  }
+
+  async play(videoTime) {
+    // return true if video play started successfully
+    this.video.currentTime = this.wrappedTime(videoTime, true);
+    this.isPlaying = true; // even if it turns out to be blocked by the browser
+    // following guidelines from https://developer.mozilla.org/docs/Web/API/HTMLMediaElement/play
+    try {
+      await this.video.play(); // will throw exception if blocked
+      this.isBlocked = false;
+    } catch (err) {
+      console.warn("video play blocked");
+      this.isBlocked = this.isPlaying; // just in case isPlaying was set false while we were trying
+    }
+    return !this.isBlocked;
+  }
+
+  pause(videoTime) {
+    this.isPlaying = this.isBlocked = false; // might not be blocked next time.
+    this.setStatic(videoTime);
+  }
+
+  setStatic(videoTime) {
+    if (videoTime !== undefined) {
+      this.video.currentTime = this.wrappedTime(videoTime, true);
+      // true => guarded from values too near the end
+    }
+    this.video.pause(); // no return value; synchronous, instantaneous?
+  }
+
+  dispose() {
+    try {
+      URL.revokeObjectURL(this.url);
+      delete this.video;
+    } catch (e) { console.warn(`error in Video2DView cleanup: ${e}`); }
+  }
+}
+
 
 async function start() {
   if (isLocal) {
     session = makeMockReflector(DrawingModel, DrawingView);
     return Promise.resolve('local');
   } else {
-    session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: 1});
+    session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: "10x3"});
     return Promise.resolve('remote');
   }
 }

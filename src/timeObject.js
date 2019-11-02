@@ -505,27 +505,27 @@ export class Action {
     this.info = info;
   }
 
-  redo(model) {
+  redo(model, time) {
     let objects = model.objects;
     if (this.type === 'clear') {
       for (let k in this.info) {
         objects.objects[k].to = this.info[k].newTo;
       }
     } else if (this.type === 'addObject') {
-      objects.addObject(model.now, this.info);
+      objects.addObject(time, this.info);
     } else if (this.type === 'finishReframe') {
       let obj = objects.objects[this.info.objectId].object;
-      let last = obj.get(model.now);
+      let last = obj.get(time);
       let moveId = newId();
-      obj.add(model.now, {message: 'firstReframe', moveId, width: last.width, height: last.height});
-      obj.addTransform(model.now, {message: 'firstReframe', moveId, transform: this.info.oldTransform});
-      obj.add(model.now, {message: 'finishReframe', width: last.width, height: last.height});
+      obj.add(time, {message: 'firstReframe', moveId, width: last.width, height: last.height});
+      obj.addTransform(time, {message: 'firstReframe', moveId, transform: this.info.oldTransform});
+      obj.add(time, {message: 'finishReframe', width: last.width, height: last.height});
       
-      obj.addTransform(model.now, {message: 'reframe', transform: this.info.newTransform});
+      obj.addTransform(time, {message: 'reframe', transform: this.info.newTransform});
     }
   }
 
-  undo(model) {
+  undo(model, time) {
     let objects = model.objects;
     if (this.type === 'clear') {
       for (let k in this.info) {
@@ -535,7 +535,7 @@ export class Action {
       objects.undoAddObject(this.info);
     } else if (this.type === 'finishReframe') {
       let obj = objects.objects[this.info.objectId].object;
-      obj.undo(model.now);
+      obj.undo(time);
     }
   }
 }
