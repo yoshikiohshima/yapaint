@@ -2,21 +2,12 @@
 
 import * as Croquet from '@croquet/croquet';
 
-import {load} from './bitmap.js';
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
 import {dragger} from './dragger.js';
 import {AssetManager} from './assetManager.js';
 
 let isLocal = true;
 let session;
-
-// let bitmaps;
-// async function getBitmaps() {
-//   if (!bitmaps) {
-//     bitmaps = await load();
-//   }
-//   return bitmaps;
-// }
 
 let bitmaps = {};
 
@@ -461,7 +452,7 @@ class DrawingModel extends M {
     if (startTime !== undefined) {this.startTime = startTime;}
     if (pausedTime !== undefined) {this.pausedTime = pausedTime;}
 
-    return {message: 'updateScreen'};
+    return info;
   }
 
   configure(info) {
@@ -483,7 +474,6 @@ class DrawingModel extends M {
     this.objects.addObject(info.time, obj);
     this.history.push(new Action('addObject', obj));
     return {message: 'updateScreen'};
-    
   }
 
   addVideo(info) {
@@ -849,7 +839,7 @@ class DrawingView extends V {
       .then(() => assetManager.importVideo(assetDescriptor, false)) // false => not 3D
       .then(objectURL => new VideoInterface(objectURL).readyPromise)
       .then(videoView => {
-        if (!okToGo) {return; }// been cancelled
+        if (!okToGo) {return;} // been cancelled
         delete this.abandonLoad;
 
         this.videoView = videoView;
@@ -858,6 +848,8 @@ class DrawingView extends V {
 
         this.applyPlayState();
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
+        this.elements.time.max = this.videoView.duration.toString();
+        
       })
       .catch(err => console.error(err));
     return {message: 'loadVideo', time: this.videoTime}
@@ -893,7 +885,7 @@ class DrawingView extends V {
       this.lastRateAdjust = this.now(); // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
       this.jumpIfNeeded = false;
       // if the video is blocked from playing, enter a stepping mode in which we move the video forward with successive pause() calls
-      videoView.play(this.calculateVideoTime() + 0.1).then(playStarted => {
+      videoView.play(videoView.calculateVideoTime() + 0.1).then(playStarted => {
         this.iconVisible('enableSound', !playStarted || videoElem.muted);
         if (playStarted) {
           // leave it a little time to stabilise          
@@ -1067,7 +1059,7 @@ class DrawingView extends V {
   timeChanged(info) {
     this.videoTime = info.time;
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - this.videoTime};
+    return {message: 'setPlayState', startTime: now - this.videoTime, time: now};
   }
 
   togglePlayState(info) {
@@ -1118,26 +1110,6 @@ class DrawingView extends V {
     }
   }
 
-  wrappedTime(videoTime, guarded, duration) {
-    if (duration) {
-      while (videoTime > duration) {
-        // videoTime -= duration;
-        let quo = Math.floor(videoTime / duration);
-        videoTime = videoTime -= duration * quo;
-        // assume it's looping, with no gap between plays
-      }
-      if (guarded) {
-        videoTime = Math.min(duration - 0.1, videoTime);
-        // the video element freaks out on being told to seek very close to the end
-      }
-    }
-    return videoTime;
-  }
-
-  calculateVideoTime(now, startTime) {
-    return now / 1000 - startTime;
-  }
-
   checkPlayStatus(now) {
     let lastStatusCheck = this.lastStatusCheck || 0;
     if (now - this.lastStatusCheck <= 100) {return;}
@@ -1150,7 +1122,7 @@ class DrawingView extends V {
     }
     this.lastTimingCheck = now;
     
-    let expectedTime = this.videoView.wrappedTime(this.calculateVideoTime(now, this.model.startTime), true, this.videoView.video.duration);
+    let expectedTime = this.videoView.wrappedTime(this.videoView.calculateVideoTime(now, this.model.startTime), true);
     const videoTime = this.videoView.video.currentTime;
     const videoDiff = videoTime - expectedTime;
     const videoDiffMS = videoDiff * 1000; // +ve means *ahead* of where it should be
@@ -1162,7 +1134,7 @@ class DrawingView extends V {
       // if there's a difference greater than 500ms, try to jump the video to the right place
       if (Math.abs(videoDiffMS) > 500) {
         console.log(`jumping video by ${-Math.round(videoDiffMS)}ms`);
-        this.videoView.video.currentTime = this.videoView.wrappedTime(videoTime - videoDiff + 0.1, true); // 0.1 to counteract the delay that the jump itself tends to introduce; true to ensure we're not jumping beyond the last video frame
+        this.videoView.video.currentTime = this.videoView.wrappedTime(videoTime - videoDiff + 0.1, true, this.videoView.duration); // 0.1 to counteract the delay that the jump itself tends to introduce; true to ensure we're not jumping beyond the last video frame
       }
     } else {
       // every 3s, check video lag/advance, and set the playback rate accordingly.
@@ -1195,7 +1167,11 @@ class DrawingView extends V {
   }
 
   setPlayState(info) {
-    return info;
+    if (this.videoView) {
+      this.videoView.video.currentTime = info.time - info.startTime;
+      this.videoTime = this.videoView.video.currentTime;
+      this.updateScreen({});
+    }      
   }
 
   update() {
@@ -1272,18 +1248,22 @@ class VideoInterface {
   width() { return this.video.videoWidth; }
   height() { return this.video.videoHeight; }
 
-  wrappedTime(videoTime, guarded, duration) {
-    if (duration) {
-      while (videoTime > duration) {
-        videoTime -= duration;
+  wrappedTime(videoTime, guarded) {
+    if (this.duration) {
+      while (videoTime > this.duration) {
+        videoTime -= this.duration;
         // assume it's looping, with no gap between plays
       }
       if (guarded) {
-        videoTime = Math.min(duration - 0.1, videoTime);
+        videoTime = Math.min(this.duration - 0.1, videoTime);
         // the video element freaks out on being told to seek very close to the end
       }
     }
     return videoTime;
+  }
+
+  calculateVideoTime(now, startTime) {
+    return now / 1000 - startTime;
   }
 
   async play(videoTime) {
