@@ -521,6 +521,8 @@ class DrawingView extends V {
       'finishStroke': 'finishStroke',
       'clearPressed': 'clearPressed',
       'goStopPressed': 'goStopPressed',
+      'backwardPressed': 'backwardPressed',
+      'forwardPressed': 'forwardPressed',
       'loadPressed': 'loadPressed',
       'timeChanged': 'timeChanged',
       'undoPressed': 'undoPressed',
@@ -561,6 +563,8 @@ class DrawingView extends V {
       timeHandler: (evt) => this.dispatch(
         {message: 'timeChanged', time: this.elements.time.valueAsNumber}),
       goStopHandler: (evt) => this.dispatch({message: 'goStopPressed'}),
+      backwardHandler: (evt) => this.dispatch({message: 'backwardPressed'}),
+      forwardHandler: (evt) => this.dispatch({message: 'forwardPressed'}),
       loadHandler: (evt) => this.dispatch({message: 'loadPressed'}),
       undoHandler: (evt) => this.dispatch({message: 'undoPressed'}),
       redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
@@ -569,7 +573,7 @@ class DrawingView extends V {
     };
 
     this.elements = {};
-    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -592,6 +596,8 @@ class DrawingView extends V {
       ['time', 'change', 'timeHandler'],
       ['time', 'input', 'timeHandler'],
       ['goStop', 'click', 'goStopHandler'],
+      ['backward', 'click', 'backwardHandler'],
+      ['forward', 'click', 'forwardHandler'],
       ['undoButton', 'click', 'undoHandler'],
       ['redoButton', 'click', 'redoHandler'],
       ['loadButton', 'click', 'loadHandler'],
@@ -1015,6 +1021,19 @@ class DrawingView extends V {
     return {message: 'togglePlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime};
   }
 
+  backwardPressed(info) {
+    let videoTime = Math.max(this.videoTime - 0.1, 0);
+    let now = this.now() / 1000;
+    return {message: 'setPlayState', startTime: now - videoTime, time: now};
+  }
+    
+  forwardPressed(info) {
+    let duration = this.videoView ? this.videoView.duration : 20;
+    let videoTime = Math.min(this.videoTime + 0.1, duration);
+    let now = this.now() / 1000;
+    return {message: 'setPlayState', startTime: now - videoTime, time: now};
+  }
+
   setColor(name) {
     this.color = name === 'eraser' ? 'white' : name;
   }
@@ -1057,9 +1076,9 @@ class DrawingView extends V {
   }
 
   timeChanged(info) {
-    this.videoTime = info.time;
+    let videoTime = info.time;
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - this.videoTime, time: now};
+    return {message: 'setPlayState', startTime: now - videoTime, time: now};
   }
 
   togglePlayState(info) {
@@ -1167,11 +1186,12 @@ class DrawingView extends V {
   }
 
   setPlayState(info) {
+    let time = info.time - info.startTime;
     if (this.videoView) {
-      this.videoView.video.currentTime = info.time - info.startTime;
-      this.videoTime = this.videoView.video.currentTime;
-      this.updateScreen({});
-    }      
+      this.videoView.video.currentTime = time;
+    }
+    this.videoTime = time;
+    this.updateScreen({});
   }
 
   update() {
