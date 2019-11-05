@@ -6,7 +6,7 @@ import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js
 import {dragger} from './dragger.js';
 import {AssetManager} from './assetManager.js';
 
-let isLocal = true;
+let isLocal = false;
 let session;
 
 let bitmaps = {};
@@ -273,7 +273,6 @@ class DrawingModel extends M {
     this.selections = {};
 
     this.messages = {
-      'render': 'render',
       'beginStroke': 'beginStroke',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
@@ -287,8 +286,6 @@ class DrawingModel extends M {
       'select': 'select',
       'unselect': 'unselect',
       // ---
-      'load': 'load',
-      'clock': 'clock',
       'seek': 'seek',
       'configure': 'configure',
       'addImage': 'addImage',
@@ -338,10 +335,6 @@ class DrawingModel extends M {
   }
 
   viewExit(viewId) {}
-
-  render() {
-    return {message: 'updateScreen'}
-  }
 
   beginStroke(info) {
     this.removeSelection(info.userId);
@@ -442,10 +435,6 @@ class DrawingModel extends M {
     return {message: 'updateScreen'};
   }
 
-  clock(info) {
-    return info;
-  }
-
   setPlayState(info) {
     let {isPlaying, startTime, pausedTime} = info;
     if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
@@ -523,14 +512,12 @@ class DrawingView extends V {
       'goStopPressed': 'goStopPressed',
       'backwardPressed': 'backwardPressed',
       'forwardPressed': 'forwardPressed',
-      'loadPressed': 'loadPressed',
       'timeChanged': 'timeChanged',
       'undoPressed': 'undoPressed',
       'redoPressed': 'redoPressed',
       'addBitmapPressed': 'addBitmapPressed',
       'addBitmapSelected': 'addBitmapSelected',
       'cornerReframe': 'cornerReframe',
-      'clock': 'clock',
       'updateScreen': 'updateScreen',
       'finishReframe': 'finishReframe',
       'load': 'load',
@@ -540,7 +527,7 @@ class DrawingView extends V {
       'loadVideo': 'loadVideo',
       'togglePlayState': 'togglePlayState',
       'setPlayState': 'setPlayState',
-      'render': 'render',
+      'atEnd': 'atEnd',
     };
 
     this.subscribe(this.modelId, "message-m", this.dispatch);
@@ -565,7 +552,6 @@ class DrawingView extends V {
       goStopHandler: (evt) => this.dispatch({message: 'goStopPressed'}),
       backwardHandler: (evt) => this.dispatch({message: 'backwardPressed'}),
       forwardHandler: (evt) => this.dispatch({message: 'forwardPressed'}),
-      loadHandler: (evt) => this.dispatch({message: 'loadPressed'}),
       undoHandler: (evt) => this.dispatch({message: 'undoPressed'}),
       redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
       addBitmapHandler: (evt) => this.addBitmapPressed(),
@@ -573,7 +559,7 @@ class DrawingView extends V {
     };
 
     this.elements = {};
-    ['body', 'canvas', 'loadButton', 'movieId', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+    ['body', 'canvas', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -600,7 +586,6 @@ class DrawingView extends V {
       ['forward', 'click', 'forwardHandler'],
       ['undoButton', 'click', 'undoHandler'],
       ['redoButton', 'click', 'redoHandler'],
-      ['loadButton', 'click', 'loadHandler'],
       // ['addBitmapButton', 'click', 'addBitmapHandler'],
       // ['addBitmapChoice', 'change', 'addBitmapSelectedHandler'],
     ];
@@ -1038,10 +1023,6 @@ class DrawingView extends V {
     this.color = name === 'eraser' ? 'white' : name;
   }
 
-  loadPressed(arg) {
-    return {message: 'load', movieId: this.movieId.textContent, time: this.videoTime};
-  }
-
   clearPressed(arg) {
     return {message: 'clear', time: this.videoTime};
   }
@@ -1186,12 +1167,18 @@ class DrawingView extends V {
   }
 
   setPlayState(info) {
-    let time = info.time - info.startTime;
-    if (this.videoView) {
-      this.videoView.video.currentTime = time;
+    if (info.time !== undefined && info.startTime !== undefined) {
+      let time = info.time - info.startTime;
+      if (this.videoView) {
+        this.videoView.video.currentTime = time;
+      }
+      this.videoTime = time;
     }
-    this.videoTime = time;
     this.updateScreen({});
+  }
+
+  atEnd(info) {
+    return Object.assign({}, info, {message: 'setPlayState'});
   }
 
   update() {
@@ -1205,16 +1192,12 @@ class DrawingView extends V {
         this.videoTime = (now / 1000) - this.model.startTime;
         if (this.videoTime > 20) {
           this.videoTime = 20;
-          this.dispatch({message: 'setPlayState', isPlaying: false, startTime: null, pauseTime: null});
+          this.dispatch({message: 'atEnd', isPlaying: false, pauseTime: this.videoTime});
           return;
         }
         this.updateScreen({});
       }
     }
-  }
-
-  render() {
-    return {message: 'render'};
   }
 }
 
