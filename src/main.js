@@ -143,6 +143,7 @@ class Interface {
 
   drawBitmap(canvas, name, info) {
     let glyph = bitmaps[name];
+    if (!glyph) {return;}
     let t = info.transform;
     let x = info.width;
     let y = info.height;
@@ -198,11 +199,12 @@ class DrawingModel extends M {
       Bitmap: {
         cls: Bitmap,
         write: (c) => {
-          let {id, transform, keys, data} = c;
-          return {id, transform, keys, data};
+          let {id, name, transform, keys, data} = c;
+          return {id, name, transform, keys, data};
         },
         read: (obj) => {
           let b = new Bitmap(obj.id);
+          b.name = obj.name;
           b.keys = obj.keys;
           b.data = obj.data;
           return b;
@@ -258,19 +260,21 @@ class DrawingModel extends M {
     }
   }
 
-  init() {
+  actuallyReset() {
     this.objects = new Objects(newId());
-
     this.isPlaying = false;
-    this.hasVideo = false;
     this.startTime = null;
     this.pausedTime = null;
-    
-    this.canvasExtent = {width: 500, height: 500};
 
     this.history = [];
     this.redoHistory = [];
     this.selections = {};
+    this.assets = {};
+    this.videoAsset = null;
+  }
+
+  init() {
+    this.actuallyReset();
 
     this.messages = {
       'beginStroke': 'beginStroke',
@@ -280,6 +284,7 @@ class DrawingModel extends M {
       'reframe': 'reframe',
       'finishReframe': 'finishReframe',
       'clear': 'clear',
+      'reset': 'reset',
       'delete': 'delete',
       'undo': 'undo',
       'redo': 'redo',
@@ -287,7 +292,6 @@ class DrawingModel extends M {
       'unselect': 'unselect',
       // ---
       'seek': 'seek',
-      'configure': 'configure',
       'addImage': 'addImage',
       'loadImage': 'loadImage',
       'addVideo': 'addVideo',
@@ -301,7 +305,6 @@ class DrawingModel extends M {
     this.subscribe(this.sessionId, "view-exit", this.viewExit);
 
     this.subscribe(this.id, "message", this.dispatch);
-    // this.future(0).tick();
     window.model = this;
   }
 
@@ -330,9 +333,7 @@ class DrawingModel extends M {
     }
   }
 
-  viewJoin(viewId) {
-    // getBitmaps();
-  }
+  viewJoin(viewId) {}
 
   viewExit(viewId) {}
 
@@ -357,15 +358,6 @@ class DrawingModel extends M {
 
   finishStroke(info) {
     return info;
-  }
-
-  addBitmap(info) {
-    this.removeSelection(info.userId);
-    let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
-    obj.addTransform(info.time, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
-    this.objects.addObject(info.time, obj);
-    this.history.push(new Action('addObject', obj));
-    return {message: 'updateScreen'};
   }
 
   reframe(info) {
@@ -407,6 +399,11 @@ class DrawingModel extends M {
     return {message: 'updateScreen'};
   }
 
+  reset(info) {
+    this.actuallyReset({});
+    return {message: 'reset'};
+  }
+
   delete(info) {
     let obj = this.selections[info.userId];
     if (!obj) {return undefined;}
@@ -414,6 +411,8 @@ class DrawingModel extends M {
     let undo = this.objects.killObject(info.time, obj.id);
     this.history.push(new Action('clear', undo));
     this.removeSelection();
+    delete this.assets[obj.id];
+    
     return {message: 'updateScreen'};
   }
 
@@ -444,29 +443,25 @@ class DrawingModel extends M {
     return info;
   }
 
-  configure(info) {
-    let {width, height} = info;
-    this.canvasExtent = {width, height};
-
-    this.objects = new Objects(newId());
-    return info;
-  }
-
   addImage(info) {
-    return {message: 'loadImage', assetDescriptor: info.assetDescriptor};
-  }
-
-  loadImage(info) {
+    let {assetDescriptor, objectId} = info;
+    let displayName = assetDescriptor.displayName;
+    let x = assetDescriptor.dropPoint.x || 0;
+    let y = assetDescriptor.dropPoint.y || 0;
     this.removeSelection(info.userId);
-    let obj = new Bitmap(info.objectId, info.name, info.width, info.height);
-    obj.addTransform(info.time, {message: 'new', transform: [1, 0, info.x, 0, 1, info.y]});
+    let obj = new Bitmap(objectId, displayName, info.width, info.height);
+    obj.addTransform(info.time, {message: 'new', transform: [1, 0, x, 0, 1, y]});
     this.objects.addObject(info.time, obj);
     this.history.push(new Action('addObject', obj));
-    return {message: 'updateScreen'};
+    this.assets[objectId] = info.assetDescriptor;
+    return {message: 'loadImage', assetDescriptor: info.assetDescriptor, objectId: objectId};
   }
 
   addVideo(info) {
-    return {message: 'loadVideo', assetDescriptor: info.assetDescriptor};
+    this.actuallyReset();
+    this.videoAsset = info.assetDescriptor;
+    return {message: 'loadVideo', assetDescriptor: info.assetDescriptor,
+            width: info.width, height: info.height, duration: info.duration};
   }
 
   togglePlayState(info) {
@@ -483,8 +478,6 @@ class DrawingModel extends M {
     return info;
   }
 
-  tick() {
-  }
 }
 
 DrawingModel.register();
@@ -508,6 +501,7 @@ class DrawingView extends V {
       'assetsDrop': 'assetsDrop',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
+      'resetPressed': 'resetPressed',
       'clearPressed': 'clearPressed',
       'goStopPressed': 'goStopPressed',
       'backwardPressed': 'backwardPressed',
@@ -521,13 +515,13 @@ class DrawingView extends V {
       'updateScreen': 'updateScreen',
       'finishReframe': 'finishReframe',
       'load': 'load',
-      'configure': 'configure',
       'addAsset': 'addAsset',
       'loadImage': 'loadImage',
       'loadVideo': 'loadVideo',
       'togglePlayState': 'togglePlayState',
       'setPlayState': 'setPlayState',
       'atEnd': 'atEnd',
+      'reset': 'reset',
     };
 
     this.subscribe(this.modelId, "message-m", this.dispatch);
@@ -546,6 +540,7 @@ class DrawingView extends V {
       drop: (evt) => this.drop(this.dropEvent(evt)),
       drag: (evt) => this.drag(evt),
       clearHandler: (evt) => this.dispatch({message: 'clearPressed'}),
+      resetHandler: (evt) => this.dispatch({message: 'resetPressed'}),
       colorHandler: (evt) => this.setColor(evt.target.id),
       timeHandler: (evt) => this.dispatch(
         {message: 'timeChanged', time: this.elements.time.valueAsNumber}),
@@ -559,7 +554,7 @@ class DrawingView extends V {
     };
 
     this.elements = {};
-    ['body', 'canvas', 'clearButton','eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -575,6 +570,7 @@ class DrawingView extends V {
       ['canvas', 'dragover', 'drag'],
       ['canvas', 'dragleave', 'drag'],
       ['clearButton', 'click', 'clearHandler'],
+      ['resetButton', 'click', 'resetHandler'],
       ['black', 'click', 'colorHandler'],
       ['blue', 'click', 'colorHandler'],
       ['red', 'click', 'colorHandler'],
@@ -601,12 +597,22 @@ class DrawingView extends V {
     this.elements.redoButton.classList.add('disabled');
 
     this.assetManager = new AssetManager();
+
+    for (let k in this.model.assets) {
+      this.actuallyLoadImage(k, this.model.assets[k]);
+    }
+
+    if (this.model.videoAsset) {
+      this.actuallyLoadVideo(this.model.videoAsset);
+    }
   }
 
   detach() {
     this.handlerMap.forEach((triple) => {
       this.elements[triple[0]].removeEventListener(triple[1], this.handlers[triple[2]]);
     });
+
+    this.reset({});
   }
 
   dropEvent(evt) {
@@ -642,7 +648,7 @@ class DrawingView extends V {
 
     let {x, y, shiftKey, userId} = this.lastPoint;
     let mySelection = this.model.selections[userId];
-    let newClick = this.model.objects.liveObjects(this.model.time).find(obj => {
+    let newClick = this.model.objects.liveObjects(this.videoTime).find(obj => {
       return obj.includesPoint(this.model.time, x, y); // && not selected by others
     });
 
@@ -784,38 +790,98 @@ class DrawingView extends V {
     }
   }
 
-  addAsset(info) {
-    let type = info.assetDescriptor.loadType;
-    if (type === 'image') {
-      return {message: 'addImage', assetDescriptor: info.assetDescriptor, time: this.videoTime};
+  reset(info) {
+    if (this.elements.backstop.firstChild) {
+      this.elements.backstop.firstChild.remove();
     }
+    this.color = 'black';
+    if (this.videoView) {
+      this.videoView.dispose();
+    }
+    this.videoView = null;
+    this.videoTime = 0;
+
+    for (let k in bitmaps) {
+      URL.revokeObjectURL(bitmaps[k].url);
+      delete bitmaps[k];
+    }
+
+    let {width, height} = info;
+    this.canvas.width = width || 500;
+    this.canvas.height = height || 500;
+    this.canvas.style.setProperty('width', (width || 500) + 'px');
+    this.canvas.style.setProperty('height', (height || 500) + 'px');
+    this.elements.time.max = length || 20;
+
+    this.elements.backstop.style.setProperty("width", width + "px");
+    this.elements.backstop.style.setProperty("height", height + "px");
+    this.elements.resizerPane.style.setProperty("width", width + "px");
+    this.elements.resizerPane.style.setProperty("height", height + "px");
+    this.updateScreen({});
+  }
+
+  async addAsset(info) {
+    let type = info.assetDescriptor.loadType;
+    let objectId = newId();
+    let userId = this.viewId;
+    let assetManager = this.assetManager;
+    let assetDescriptor = info.assetDescriptor;
+
+    if (type === 'image') {
+      let objURL = await this.assetManager.importImage(assetDescriptor);
+      let img;
+      await new Promise((resolve, reject) => {
+        img = document.createElement('img');
+        img.src = objURL;
+        img.onload = resolve;
+      });
+
+      return {
+        message: 'addImage', assetDescriptor, objectId, userId, 
+        width: img.width, height: img.height,
+        time: this.videoTime
+      };
+    }
+
     if (type === 'video') {
-      return {message: 'addVideo', assetDescriptor: info.assetDescriptor, time: this.videoTime};
+      let okToGo = true; // unless cancelled by another load, or a shutdown
+      let obj = await assetManager.ensureAssetsAvailable(assetDescriptor)
+        .then(() => assetManager.importVideo(assetDescriptor, false)) // false => not 3D
+        .then(objectURL => new VideoInterface(objectURL).readyPromise)
+        .then(videoView => {
+          if (!okToGo) {return;} // been cancelled
+          return videoView;
+        });
+
+      if (obj) {
+        return {
+          message: 'addVideo', assetDescriptor, objectId, userId, 
+          width: obj.width(), height: obj.height(), duration: obj.duration,
+          time: this.videoTime
+        };
+      }
     }
     return undefined;
   }
 
-  async loadImage(info) {
-    let objURL = await this.assetManager.importImage(info.assetDescriptor);
-    let img;
-    let objectId = newId();
-    await new Promise((resolve, reject) => {
-      img = document.createElement('img');
-      img.src = objURL;
-      img.onload = resolve;
-      bitmaps[objURL] = img;
-    });
-    return {
-      message: 'loadImage', name: objURL, objectId, width:
-      img.width, height: img.height,
-      x: info.assetDescriptor.dropPoint.x || 0,
-      y: info.assetDescriptor.dropPoint.y || 0,
-      time: this.videoTime
-    };
+  loadImage(info) {
+    this.actuallyLoadImage(info.objectId, info.assetDescriptor);
   }
 
-  async loadVideo(info) {
-    let assetDescriptor = info.assetDescriptor;
+  async actuallyLoadImage(objectId, assetDescriptor) {
+    let objURL = await this.assetManager.importImage(assetDescriptor);
+    let img = document.createElement('img');
+    img.src = objURL;
+    img.onload = () => this.updateScreen({});
+    bitmaps[objectId] = img;
+  }
+
+  loadVideo(info) {
+    // this.reset({width: info.width, height: info.height, duration: info.duration});
+    this.actuallyLoadVideo(info.assetDescriptor);
+  }
+
+  async actuallyLoadVideo(assetDescriptor) {
     let assetManager = this.assetManager;
     let okToGo = true; // unless cancelled by another load, or a shutdown
     //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
@@ -825,7 +891,7 @@ class DrawingView extends V {
                             startTime: this.model.startTime,
                             pausedTime: this.model.pausedTime });
     // will be stored for now, and may be overridden by messages in a backlog by the time the video is ready
-    
+
     await assetManager.ensureAssetsAvailable(assetDescriptor)
       .then(() => assetManager.importVideo(assetDescriptor, false)) // false => not 3D
       .then(objectURL => new VideoInterface(objectURL).readyPromise)
@@ -1027,6 +1093,10 @@ class DrawingView extends V {
     return {message: 'clear', time: this.videoTime};
   }
 
+  resetPressed(arg) {
+    return {message: 'reset', time: this.videoTime};
+  }
+
   undoPressed(arg) {
     return {message: 'undo', time: this.videoTime};
   }
@@ -1070,18 +1140,6 @@ class DrawingView extends V {
     } else {
       this.videoView.pause(this.videoTime);
     }
-  }
-
-  configure(obj) {
-    let {width, height, length} = obj;
-    this.canvas.width = width;
-    this.canvas.height = height;
-    this.elements.time.max = length;
-
-    this.elements.backstop.style.setProperty("width", width + "px");
-    this.elements.backstop.style.setProperty("height", height + "px");
-    this.elements.resizerHolder.style.setProperty("width", width + "px");
-    this.elements.resizerHolder.style.setProperty("height", height + "px");
   }
 
   updateScreen(info) {

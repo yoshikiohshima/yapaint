@@ -157,10 +157,11 @@ export class Bitmap {
   constructor(id, name, width, height) {
     this.id = id;
     this.transform = new Transform();
+    this.name = name;
     let m1 = toKey(-1);
     this.keys = [m1];
     this.data = new Map();
-    this.data.set(m1, [{name, width, height}]);
+    this.data.set(m1, [{width, height}]);
     // this.data {name, width, height}, in the inherent size
   }
 
@@ -199,7 +200,7 @@ export class Bitmap {
   getRect(time) {
     let last = this.get(time);
     let transform = this.transform.get(time).transform;
-    return {name: last.name, width: last.width, height: last.height, transform: transform};
+    return {width: last.width, height: last.height, transform: transform};
   }
 
   reframe(time, info) {
@@ -207,7 +208,7 @@ export class Bitmap {
     let t = rect.transform;
     if (info.firstReframe) {
       let moveId = newId();
-      this.add(time, {message: 'firstReframe', moveId, name: rect.name, width: rect.width, height: rect.height});
+      this.add(time, {message: 'firstReframe', moveId, width: rect.width, height: rect.height});
       this.addTransform(time, {message: 'firstReframe', moveId, transform: rect.transform});
     } else {
       let newTransform = info.transform;
@@ -219,7 +220,7 @@ export class Bitmap {
     let last = this.get(time);
     let transform = this.transform.get(time).transform;
 
-    this.add(time, {message: 'finishReframe', name: last.name, width: last.width, height: last.height});
+    this.add(time, {message: 'finishReframe', width: last.width, height: last.height});
 
     return new Action('finishReframe', {
       message: 'reframe', objectId: info.objectId, width: last.width, height: last.height, oldTransform: info.transform, newTransform: transform
@@ -228,7 +229,7 @@ export class Bitmap {
 
   applyTo(canvas, time, intf) {
     let last = this.get(time);
-    intf.drawBitmap(canvas, last.name, this.getRect(time));
+    intf.drawBitmap(canvas, this.id, this.getRect(time));
   }
 
   undo(time) {
