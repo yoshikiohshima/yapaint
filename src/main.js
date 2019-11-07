@@ -334,7 +334,7 @@ class DrawingModel extends M {
 
   viewJoin(viewId) {
     window.model = this;
-    console.log('joinn: ', viewId);
+    console.log('join: ', viewId);
   }
 
   viewExit(viewId) {console.log('leave: ', viewId);}
