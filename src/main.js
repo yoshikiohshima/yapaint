@@ -6,7 +6,7 @@ import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js
 import {dragger} from './dragger.js';
 import {AssetManager} from './assetManager.js';
 
-let isLocal = true;
+let isLocal = false;
 let session;
 
 let bitmaps = {};
