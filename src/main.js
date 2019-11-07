@@ -296,7 +296,6 @@ class DrawingModel extends M {
       'loadImage': 'loadImage',
       'addVideo': 'addVideo',
       'loadVideo': 'loadVideo',
-      'togglePlayState': 'togglePlayState',
       'setPlayState': 'setPlayState',
       'updateTime': 'updateTime',
     };
@@ -333,9 +332,12 @@ class DrawingModel extends M {
     }
   }
 
-  viewJoin(viewId) {}
+  viewJoin(viewId) {
+    window.model = this;
+    console.log('joinn: ', viewId);
+  }
 
-  viewExit(viewId) {}
+  viewExit(viewId) {console.log('leave: ', viewId);}
 
   beginStroke(info) {
     this.removeSelection(info.userId);
@@ -434,15 +436,6 @@ class DrawingModel extends M {
     return {message: 'updateScreen'};
   }
 
-  setPlayState(info) {
-    let {isPlaying, startTime, pausedTime} = info;
-    if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
-    if (startTime !== undefined) {this.startTime = startTime;}
-    if (pausedTime !== undefined) {this.pausedTime = pausedTime;}
-
-    return info;
-  }
-
   addImage(info) {
     let {assetDescriptor, objectId} = info;
     let displayName = assetDescriptor.displayName;
@@ -464,20 +457,14 @@ class DrawingModel extends M {
             width: info.width, height: info.height, duration: info.duration};
   }
 
-  togglePlayState(info) {
-    let now = info.time;
+  setPlayState(info) {
+    let {isPlaying, startTime, pausedTime} = info;
+    if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
+    if (startTime !== undefined) {this.startTime = startTime;}
+    if (pausedTime !== undefined) {this.pausedTime = pausedTime;}
 
-    this.isPlaying = !this.isPlaying;
-    if (this.isPlaying) {
-      this.startTime = info.startTime;
-      this.pausedTime = null;
-    } else {
-      this.startTime = null;
-      this.pausedTime = now;
-    }
     return info;
   }
-
 }
 
 DrawingModel.register();
@@ -492,6 +479,8 @@ class DrawingView extends V {
     this.videoTime = 0;
     
     this.resizers = {};
+
+    this.isSynced = false;
 
     this.messages = {
       'mouseDown': 'mouseDown',
@@ -518,13 +507,13 @@ class DrawingView extends V {
       'addAsset': 'addAsset',
       'loadImage': 'loadImage',
       'loadVideo': 'loadVideo',
-      'togglePlayState': 'togglePlayState',
       'setPlayState': 'setPlayState',
       'atEnd': 'atEnd',
       'reset': 'reset',
     };
 
     this.subscribe(this.modelId, "message-m", this.dispatch);
+    this.subscribe(this.viewId, "synced", this.synced);
 
     this.content = document.querySelector("#draw-content");
 
@@ -605,14 +594,30 @@ class DrawingView extends V {
     if (this.model.videoAsset) {
       this.actuallyLoadVideo(this.model.videoAsset);
     }
+
+    if (this.model.isPlaying) {console.log("it is already playing");}
+  }
+
+  synced(value) {
+    this.isSynced = value;
+    console.log('synced', this.isSynced);
+    if (!this.isSynced) {return;}
+    if (this.maybeVideo) {
+      let video = this.maybeVideo;
+      this.maybeVideo = null;
+      this.loadVideo(video);
+    }
   }
 
   detach() {
+    super.detach();
+    this.detatched = true;
     this.handlerMap.forEach((triple) => {
       this.elements[triple[0]].removeEventListener(triple[1], this.handlers[triple[2]]);
     });
 
     this.reset({});
+    this.isSynced = false;
   }
 
   dropEvent(evt) {
@@ -791,6 +796,8 @@ class DrawingView extends V {
   }
 
   reset(info) {
+    this.maybeVideo = null;
+    
     if (this.elements.backstop.firstChild) {
       this.elements.backstop.firstChild.remove();
     }
@@ -807,20 +814,21 @@ class DrawingView extends V {
     }
 
     let {width, height} = info;
-    this.canvas.width = width || 500;
-    this.canvas.height = height || 500;
-    this.canvas.style.setProperty('width', (width || 500) + 'px');
-    this.canvas.style.setProperty('height', (height || 500) + 'px');
+    width = width || 500;
+    height = height || 500;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.canvas.style.setProperty('width', width + 'px');
+    this.canvas.style.setProperty('height', height + 'px');
     this.elements.time.max = length || 20;
 
     this.elements.backstop.style.setProperty("width", width + "px");
     this.elements.backstop.style.setProperty("height", height + "px");
-    this.elements.resizerPane.style.setProperty("width", width + "px");
-    this.elements.resizerPane.style.setProperty("height", height + "px");
     this.updateScreen({});
   }
 
   async addAsset(info) {
+    console.log('addAsset', info);
     let type = info.assetDescriptor.loadType;
     let objectId = newId();
     let userId = this.viewId;
@@ -877,7 +885,18 @@ class DrawingView extends V {
   }
 
   loadVideo(info) {
-    // this.reset({width: info.width, height: info.height, duration: info.duration});
+    if (!isLocal && !this.isSynced) {
+      console.log('not synced', info, this.videoView);
+      this.maybeVideo = info;
+      return;
+    }
+
+    if (this.maybeVideo) {
+      console.log('maybeVideo');
+      return;
+    }
+    
+    this.reset({width: info.width, height: info.height, duration: info.duration});
     this.actuallyLoadVideo(info.assetDescriptor);
   }
 
@@ -931,19 +950,17 @@ class DrawingView extends V {
     let videoView = this.videoView;
     let videoElem = videoView.video;
 
+    let now = this.now();
+
     console.log("apply playState", {...this.latestPlayState});
     if (!this.latestPlayState.isPlaying) {
-      // this.iconVisible('play', true);
-      // this.iconVisible('enableSound', false);
       videoView.pause(this.latestPlayState.pausedTime);
     } else {
-      // this.iconVisible('play', false);
       videoElem.playbackRate = 1 + this.playbackBoost * 0.01;
-      this.lastRateAdjust = this.now(); // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
+      this.lastRateAdjust = now; // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
       this.jumpIfNeeded = false;
       // if the video is blocked from playing, enter a stepping mode in which we move the video forward with successive pause() calls
-      videoView.play(videoView.calculateVideoTime() + 0.1).then(playStarted => {
-        this.iconVisible('enableSound', !playStarted || videoElem.muted);
+      videoView.play(videoView.calculateVideoTime(now, this.model.startTime) + 0.1).then(playStarted => {
         if (playStarted) {
           // leave it a little time to stabilise          
           this.future(250).triggerJumpCheck();
@@ -960,7 +977,12 @@ class DrawingView extends V {
     }
     if (this.latestActionSpec) {this.revealAction(this.latestActionSpec);}
   }
-    
+
+  triggerJumpCheck() {
+    // on next checkPlayStatus() that does a timing check
+    this.jumpIfNeeded = true;
+  }
+
   drawFrames(intf) {
     for (let k in this.resizers) {
       for (let j in this.resizers[k]) {
@@ -1069,7 +1091,7 @@ class DrawingView extends V {
   goStopPressed(info) {
     let now = this.now();
     let newPlaying = !this.model.isPlaying;
-    return {message: 'togglePlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime};
+    return {message: 'setPlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime};
   }
 
   backwardPressed(info) {
@@ -1130,16 +1152,6 @@ class DrawingView extends V {
     let videoTime = info.time;
     let now = this.now() / 1000;
     return {message: 'setPlayState', startTime: now - videoTime, time: now};
-  }
-
-  togglePlayState(info) {
-    if (!this.videoView) {return;}
-
-    if (this.model.isPlaying) {
-      this.videoView.play(this.videoTime);
-    } else {
-      this.videoView.pause(this.videoTime);
-    }
   }
 
   updateScreen(info) {
@@ -1226,11 +1238,17 @@ class DrawingView extends V {
 
   setPlayState(info) {
     if (info.time !== undefined && info.startTime !== undefined) {
-      let time = info.time - info.startTime;
+      let now = this.now();
+      let time = (now / 1000) - info.startTime;
+      this.videoTime = time;
       if (this.videoView) {
         this.videoView.video.currentTime = time;
+        if (this.model.isPlaying) {
+          this.videoView.play(this.videoTime);
+        } else {
+          this.videoView.pause(this.videoTime);
+        }
       }
-      this.videoTime = time;
     }
     this.updateScreen({});
   }
@@ -1275,7 +1293,9 @@ class VideoInterface {
     });
 
     this.video.oncanplay = () => {
-      this.duration = this.video.duration; // ondurationchange is (apparently) always ahead of oncanplay
+      if (this.video) {
+        this.duration = this.video.duration; // ondurationchange is (apparently) always ahead of oncanplay
+      }
       this._ready();
     };
 
@@ -1329,7 +1349,9 @@ class VideoInterface {
 
   async play(videoTime) {
     // return true if video play started successfully
-    this.video.currentTime = this.wrappedTime(videoTime, true);
+    let t = this.wrappedTime(videoTime, true);
+    console.log('play', t);
+    this.video.currentTime = t;
     this.isPlaying = true; // even if it turns out to be blocked by the browser
     // following guidelines from https://developer.mozilla.org/docs/Web/API/HTMLMediaElement/play
     try {
@@ -1358,7 +1380,10 @@ class VideoInterface {
   dispose() {
     try {
       URL.revokeObjectURL(this.url);
-      delete this.video;
+      if (this.video) {
+        delete this.video.oncanplay;
+        delete this.video;
+      }
     } catch (e) { console.warn(`error in Video2DView cleanup: ${e}`); }
   }
 }
@@ -1369,6 +1394,7 @@ async function start() {
     session = makeMockReflector(DrawingModel, DrawingView);
     return Promise.resolve('local');
   } else {
+    // Croquet.App.makeWidgetDock();
     session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: "10x3"});
     return Promise.resolve('remote');
   }
