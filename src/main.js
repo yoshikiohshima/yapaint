@@ -6,7 +6,7 @@ import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js
 import {dragger} from './dragger.js';
 import {AssetManager} from './assetManager.js';
 
-let isLocal = false;
+let isLocal = true;
 let session;
 
 let bitmaps = {};
@@ -121,11 +121,18 @@ class Interface {
     let {x0, y0, x1, y1, color} = obj;
     let ctx = canvas.getContext('2d');
 
-    ctx.strokeStyle = color;
-    
-    ctx.lineWidth = color === 'white' ? 6 : 2;
-
     ctx.save();
+
+    if (color === 'erase') {
+      ctx.strokeStyle = '#ffffffff';
+      ctx.globalCompositeOperation = "destination-out";
+    } else {
+      ctx.strokeStyle = color;
+      ctx.globalCompositeOperation = "source-over";
+    }
+    
+    ctx.lineWidth = color === 'erase' ? 6 : 2;
+
     ctx.transform(transform[0], transform[3], transform[1], transform[4], transform[2], transform[5]);
 
     ctx.beginPath();
@@ -1108,7 +1115,7 @@ class DrawingView extends V {
   }
 
   setColor(name) {
-    this.color = name === 'eraser' ? 'white' : name;
+    this.color = name === 'eraser' ? 'erase' : name;
   }
 
   clearPressed(arg) {
