@@ -341,10 +341,10 @@ class DrawingModel extends M {
 
   viewJoin(viewId) {
     window.model = this;
-    console.log('join: ', viewId);
+    console.log();
   }
 
-  viewExit(viewId) {console.log('leave: ', viewId);}
+  viewExit(viewId) {}
 
   beginStroke(info) {
     this.removeSelection(info.userId);
