@@ -459,9 +459,9 @@ class DrawingModel extends M {
 
   addVideo(info) {
     this.actuallyReset();
-    this.videoAsset = info.assetDescriptor;
-    return {message: 'loadVideo', assetDescriptor: info.assetDescriptor,
-            width: info.width, height: info.height, duration: info.duration};
+    let {assetDescriptor, width, height, duration} = info;
+    this.videoAsset = {assetDescriptor, width, height, duration};
+    return Object.assign({message: 'loadVideo'}, this.videoAsset);
   }
 
   setPlayState(info) {
@@ -599,7 +599,8 @@ class DrawingView extends V {
     }
 
     if (this.model.videoAsset) {
-      this.actuallyLoadVideo(this.model.videoAsset);
+      this.reset(this.model.videoAsset);
+      this.actuallyLoadVideo(this.model.videoAsset.assetDescriptor);
     }
 
     if (this.model.isPlaying) {console.log("it is already playing");}
