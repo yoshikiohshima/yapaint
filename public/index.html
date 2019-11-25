@@ -14,19 +14,12 @@
 <body id="body">
   <div id="draw-content">
     <div style="display: flex">
-      <div>Movie Animator</div>
+      <div>Movie Animator</div><button title="upload" id="uploadButton">Upload!</button>
     </div>
     <div style="display: flex">
       <div id="backstop" style="position: relative; width: 500px; height: 500px; border: 1px solid red; overflow: hidden"></div>
       <div id="compound" style="position: absolute">
 	<canvas id="canvas" width=500 height=500 style="border: 1px solid black; position: absolute"></canvas>
-	<select id="addBitmapChoice" style="display: none; position: absolute;">
-	  <option value="awake">awake</option>
-	  <option value="left1">left1</option>
-	  <option value="up1">up1</option>
-	  <option value="right1">right1</option>
-	  <option value="down1">down1</option>
-	</select>
 	<div id="resizerPane" class="resizerPane"></div>
       </div>
       <div id="colors" class="colors" style="display: flex; flex-direction: column">

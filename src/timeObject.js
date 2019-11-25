@@ -421,10 +421,9 @@ export class Objects {
     this.objects[obj.id] = {object: obj, from: toKey(time)};
   }
 
-  undoAddObject(object) {
-    let obj = this.objects[object.id].object;
-    delete this.objects[object.id];
-    return obj;
+  undoAddObject(object, time) {
+    this.killObject(time, object.id);
+    return object;
   }
 
   get(time, objectId) {
@@ -533,7 +532,7 @@ export class Action {
         objects.objects[k].to = this.info[k].oldTo;
       }
     } else if (this.type === 'addObject') {
-      objects.undoAddObject(this.info);
+      objects.undoAddObject(this.info, time);
     } else if (this.type === 'finishReframe') {
       let obj = objects.objects[this.info.objectId].object;
       obj.undo(time);

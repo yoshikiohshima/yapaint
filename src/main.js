@@ -1,5 +1,3 @@
-/* global YT */
-
 import * as Croquet from '@croquet/croquet';
 
 import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js';
@@ -287,7 +285,6 @@ class DrawingModel extends M {
       'beginStroke': 'beginStroke',
       'stroke': 'stroke',
       'finishStroke': 'finishStroke',
-      'addBitmap': 'addBitmap',
       'reframe': 'reframe',
       'finishReframe': 'finishReframe',
       'clear': 'clear',
@@ -505,8 +502,6 @@ class DrawingView extends V {
       'timeChanged': 'timeChanged',
       'undoPressed': 'undoPressed',
       'redoPressed': 'redoPressed',
-      'addBitmapPressed': 'addBitmapPressed',
-      'addBitmapSelected': 'addBitmapSelected',
       'cornerReframe': 'cornerReframe',
       'updateScreen': 'updateScreen',
       'finishReframe': 'finishReframe',
@@ -545,12 +540,11 @@ class DrawingView extends V {
       forwardHandler: (evt) => this.dispatch({message: 'forwardPressed'}),
       undoHandler: (evt) => this.dispatch({message: 'undoPressed'}),
       redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
-      addBitmapHandler: (evt) => this.addBitmapPressed(),
-      addBitmapSelectedHandler: (evt) => this.dispatch({message: 'addBitmapSelected', target: evt.target})
+      uploadHandler: (evt) => this.upload(evt),
     };
 
     this.elements = {};
-    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'addBitmapButton', 'addBitmapChoice'].forEach((n) => {
+    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'uploadButton'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -578,8 +572,7 @@ class DrawingView extends V {
       ['forward', 'click', 'forwardHandler'],
       ['undoButton', 'click', 'undoHandler'],
       ['redoButton', 'click', 'redoHandler'],
-      // ['addBitmapButton', 'click', 'addBitmapHandler'],
-      // ['addBitmapChoice', 'change', 'addBitmapSelectedHandler'],
+      ['uploadButton', 'click', 'uploadHandler'],
     ];
 
     this.handlerMap.forEach((triple) => {
@@ -929,6 +922,7 @@ class DrawingView extends V {
         this.videoView = videoView;
         this.playbackBoost = 0;
         this.elements.backstop.appendChild(videoView.video);
+        this.videoDescriptor = assetDescriptor;
 
         this.applyPlayState();
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
@@ -1135,23 +1129,6 @@ class DrawingView extends V {
     return {message: 'redo', time: this.videoTime};
   }
 
-  addBitmapPressed(evt) {
-    this.elements.addBitmapChoice.style.setProperty("display", "inherit");
-  }
-
-  async addBitmapSelected(evt) {
-    this.elements.addBitmapChoice.style.setProperty("display", "none");
-
-    let name = evt.target.value;
-    // await getBitmaps();
-    let bits = bitmaps[name];
-    if (bits) {
-      let id = newId();
-      return {message: 'addBitmap', name: name, x: 100, y: 100, width: bits.width, height: bits.height, objectId: id, userId: this.viewId, time: this.videoTime};
-    }
-    return undefined;
-  }
-
   finishReframe(info) {
     this.updateButtons();
   }
@@ -1282,6 +1259,82 @@ class DrawingView extends V {
         this.updateScreen({});
       }
     }
+  }
+
+  async upload(evt) {
+    let gzurl = await this.reallyUpload();
+    if (!gzurl) {
+      console.error("Failed to upload snapshot");
+      return null;
+    }
+
+    if (!this.videoDescriptor) {
+      console.error("no video");
+      return null;
+    }
+
+    // let functionURL = 'http://localhost:8080';
+    
+    let functionURL = 'https://us-central1-movie-compositor.cloudfunctions.net/ffmpeg_handler';
+
+    let url = this.videoDescriptor.fileDict[this.videoDescriptor.displayName].blobURL;
+    let reqBody = JSON.stringify({
+      url: url,
+      snapshotURL: gzurl});
+
+    /*
+    await fetch(functionURL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+      },
+      body: reqBody
+    }).then((response) => {
+      console.log(response.body);
+      let reader = response.body.getReader();
+    });
+    */
+
+    /*
+    let xml = new XMLHttpRequest();
+    xml.open('GET', `${functionURL}?url=${url}&snapshotURL=${gzurl}`);
+    xml.setRequestHeader('Content-Type', 'text/plain');
+    //xml.onreadystatechange = console.log;
+    xml.send();
+    xml.onload = () => {
+      console.log('req status', xml.status);
+    };
+    */
+
+    let a = document.createElement('a');
+    a.textContent = 'Download';
+    a.href = `${functionURL}?url=${url}&snapshotURL=${gzurl}`;
+    document.body.appendChild(a);
+    a.click();
+  }
+
+  async reallyUpload() {
+    if (this.realm && this.realm.island.controller) {
+      let controller = this.realm.island.controller;
+      let snapshot = controller.takeSnapshot();
+      await controller.hashSnapshot(snapshot);
+      const body = JSON.stringify(snapshot);
+      const {time, seq, hash} = snapshot.meta;
+      const gzurl = controller.snapshotUrl('snap', time, seq, hash, 'gz');
+      const socket = controller.connection.socket;
+      const success = await controller.uploadGzipped(gzurl, body);
+      if (controller.connection.socket !== socket) {
+        console.error("Controller was reset while trying to upload snapshot");
+        return null;
+      }
+      if (!success) {
+        console.error("Failed to upload snapshot");
+        return null;
+      }
+      return gzurl;
+    }
+    return null;
   }
 }
 
