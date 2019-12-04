@@ -4,10 +4,16 @@ import {Objects, Stroke, Bitmap, Action, Transform, newId} from './timeObject.js
 import {dragger} from './dragger.js';
 import {AssetManager} from './assetManager.js';
 
+let landingPage;
+let drawContent;
+let initDrop;
+
 let isLocal = false;
 let session;
 
 let bitmaps = {};
+
+let assetManager =  new AssetManager();
 
 const VIEW_EARLY_DRAW = false;
 
@@ -585,15 +591,12 @@ class DrawingView extends V {
     this.elements.undoButton.classList.add('disabled');
     this.elements.redoButton.classList.add('disabled');
 
-    this.assetManager = new AssetManager();
-
     for (let k in this.model.assets) {
       this.actuallyLoadImage(k, this.model.assets[k]);
     }
 
     if (this.model.videoAsset) {
-      this.reset(this.model.videoAsset);
-      this.actuallyLoadVideo(this.model.videoAsset.assetDescriptor);
+      this.loadVideo(this.model.videoAsset.assetDescriptor);
     }
 
     if (this.model.isPlaying) {console.log("it is already playing");}
@@ -776,6 +779,13 @@ class DrawingView extends V {
     evt.preventDefault();
   }
 
+  initDropVideo(file) {
+    if (file) {
+      const dropPoint = {x: 0, y: 0};
+      assetManager.handleFile(file, this.model, this, dropPoint);
+    }
+  }
+
   drop(evt) {
     let isFileDrop = (evt) => {
       const dt = evt.dataTransfer;
@@ -790,7 +800,7 @@ class DrawingView extends V {
     const cRect = this.canvas.getBoundingClientRect();
     const dropPoint = { x: evt.clientX - cRect.left, y: evt.clientY - cRect.top };
     if (isFileDrop(evt)) {
-      this.assetManager.handleFileDrop(evt.dataTransfer.items, this.model, this, dropPoint);
+      assetManager.handleFileDrop(evt.dataTransfer.items, this.model, this, dropPoint);
     } else {
       console.log("unknown drop type");
     }
@@ -833,11 +843,10 @@ class DrawingView extends V {
     let type = info.assetDescriptor.loadType;
     let objectId = newId();
     let userId = this.viewId;
-    let assetManager = this.assetManager;
     let assetDescriptor = info.assetDescriptor;
 
     if (type === 'image') {
-      let objURL = await this.assetManager.importImage(assetDescriptor);
+      let objURL = await assetManager.importImage(assetDescriptor);
       let img;
       await new Promise((resolve, reject) => {
         img = document.createElement('img');
@@ -878,7 +887,7 @@ class DrawingView extends V {
   }
 
   async actuallyLoadImage(objectId, assetDescriptor) {
-    let objURL = await this.assetManager.importImage(assetDescriptor);
+    let objURL = await assetManager.importImage(assetDescriptor);
     let img = document.createElement('img');
     img.src = objURL;
     img.onload = () => this.updateScreen({});
@@ -896,13 +905,12 @@ class DrawingView extends V {
       console.log('maybeVideo');
       return;
     }
-    
+
     this.reset({width: info.width, height: info.height, duration: info.duration});
     this.actuallyLoadVideo(info.assetDescriptor);
   }
 
   async actuallyLoadVideo(assetDescriptor) {
-    let assetManager = this.assetManager;
     let okToGo = true; // unless cancelled by another load, or a shutdown
     //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
     this.abandonLoad = () => okToGo = false;
@@ -1262,25 +1270,36 @@ class DrawingView extends V {
   }
 
   async upload(evt) {
+    window.location.href.includes('local_function')
+    let functionURL = window.location.href.includes('local_function')
+      ? 'http://localhost:8080'
+      : 'https://us-central1-movie-compositor.cloudfunctions.net/ffmpeg_handler';
+
     let gzurl = await this.reallyUpload();
     if (!gzurl) {
       console.error("Failed to upload snapshot");
       return null;
     }
 
-    if (!this.videoDescriptor) {
-      console.error("no video");
-      return null;
+    let reqBody;
+    let href;
+    if (this.videoDescriptor) {
+      let movieURL = this.videoDescriptor.fileDict[this.videoDescriptor.displayName].blobURL;
+      reqBody = {
+        movieURL,
+        snapshotURL: gzurl,
+      };
+      href = `${functionURL}?movieURL=${movieURL}&snapshotURL=${gzurl}`;
+    } else {
+      reqBody = {
+        snapshotURL: gzurl,
+        movieWidth: `${this.canvas.width}`,
+        movieHeight: `${this.canvas.height}`,
+        movieLength: '20'
+      };
+
+      href = `${functionURL}?snapshotURL=${gzurl}&movieWidth=${reqBody.movieWidth}&movieHeight=${reqBody.movieHeight}&movieLength=${reqBody.movieLength}`;
     }
-
-    // let functionURL = 'http://localhost:8080';
-    
-    let functionURL = 'https://us-central1-movie-compositor.cloudfunctions.net/ffmpeg_handler';
-
-    let url = this.videoDescriptor.fileDict[this.videoDescriptor.displayName].blobURL;
-    let reqBody = JSON.stringify({
-      url: url,
-      snapshotURL: gzurl});
 
     /*
     await fetch(functionURL, {
@@ -1289,7 +1308,7 @@ class DrawingView extends V {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
       },
-      body: reqBody
+      body: JSON.stringify(reqBody)
     }).then((response) => {
       console.log(response.body);
       let reader = response.body.getReader();
@@ -1309,8 +1328,7 @@ class DrawingView extends V {
 
     let a = document.createElement('a');
     a.textContent = 'Download';
-    a.href = `${functionURL}?url=${url}&snapshotURL=${gzurl}`;
-    document.body.appendChild(a);
+    a.href = href;
     a.click();
   }
 
@@ -1450,15 +1468,84 @@ class VideoInterface {
 }
 
 
-async function start() {
+async function start(name, file) {
   if (isLocal) {
     session = makeMockReflector(DrawingModel, DrawingView);
-    return Promise.resolve('local');
   } else {
-    // Croquet.App.makeWidgetDock();
-    session = await Croquet.startSession("Drawing", DrawingModel, DrawingView, {tps: "10x3"});
-    return Promise.resolve('remote');
+    Croquet.App.makeWidgetDock();
+    session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
+    if (file) {
+      session.view.initDropVideo(file);
+    }
+  }
+  return Promise.resolve(isLocal ? 'local' : 'remote');
+}
+
+function editor(file, name) {
+  if (!name) {
+    name = newId();
+    window.location.hash = name;
+  }
+  start(name, file);
+  drawContent.style.removeProperty("display");
+  landingPage.style.setProperty("display", "none");
+}
+
+function isMovieDrop(evt) {
+  const dt = evt.dataTransfer;
+  return (dt && dt.types.length === 1 && dt.types[0] === "Files" && dt.items[0].type === "video/mp4");
+}
+
+function drop(evt) {
+  evt.preventDefault();
+
+  if (isMovieDrop(evt)) {
+    let item = evt.dataTransfer.items[0];
+    let file = item.getAsFile();
+    
+    editor(file);
+  } else {
+    console.log("unknown drop type");
   }
 }
 
-start();
+function dragleave(evt) {
+  evt.preventDefault();
+  initDrop.classList.remove("hover");
+}
+
+function dragover(evt) {
+  evt.preventDefault();
+  if (isMovieDrop(evt)) {
+    initDrop.classList.add("hover");
+  }
+}
+
+function init() {
+  landingPage = document.getElementById("landing-page");
+  drawContent = document.getElementById("draw-content");
+  initDrop = document.getElementById("init-drop");
+
+  let reg = /.*\/#([0-9a-f]+)/;
+  let match = reg.exec(window.location.href);
+  let name;
+  if (match) {
+    name = match[1];
+  }
+
+  if (name) {
+    editor(null, name);
+    return;
+  }
+
+  let startButton = document.getElementById("startButton");
+  drawContent.style.setProperty("display", "none");
+
+  startButton.addEventListener("click", (evt) => editor(null));
+  initDrop.addEventListener("drop", (evt) => drop(evt));
+  initDrop.addEventListener("dragover", (evt) => dragover(evt));
+  initDrop.addEventListener("dragleave", (evt) => dragleave(evt));
+  document.addEventListener("dragover", (evt) => evt.preventDefault());
+}
+
+init();

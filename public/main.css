@@ -1,3 +1,20 @@
+.drop_zone {
+    font-size: 30px;
+    background-color: white;
+}
+
+.drop_zone.hover {
+    font-size: 36px;
+    background-color: #c8dadf;
+    transition:all 0.3s ease;
+}
+    
+
+.startButton {
+    font-size: 20px;
+    width: 400px;
+}
+
 .grow:hover {
     -webkit-transform: scale(1.2);
     -ms-transform: scale(1.2);

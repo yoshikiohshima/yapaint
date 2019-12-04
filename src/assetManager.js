@@ -118,6 +118,28 @@ export class AssetManager {
         this.displayAssets(specArrays, importSizeChecker, { roomModel, roomView, dropPoint });
     }
 
+    async handleFile(file, roomModel, roomView, dropPoint) {
+        const importSizeChecker = this.makeImportChecker();
+        const specPromises = [];
+
+        const fileType = this.getFileType(file.name);
+        let specArrayPromise = Promise.resolve().then(() => importSizeChecker.withinLimits);          specArrayPromise = specArrayPromise.then(ok => ok
+                                                 ? this.fetchSpecForDroppedFile(file, fileType).then(fileSpec => {
+                            if (fileSpec && importSizeChecker.addItem(fileSpec)) {
+                                fileSpec.path = file.name;
+                                fileSpec.depth = 1;
+                                return [fileSpec];
+                            }
+                            return null;
+                        })
+                        : null
+                    );
+        specPromises.push(specArrayPromise);
+
+        const specArrays = (await Promise.all(specPromises)).filter(Boolean); // filter out any nulls.
+        this.displayAssets(specArrays, importSizeChecker, { roomModel, roomView, dropPoint });
+    }
+
     async displayAssets(specArrays, importSizeChecker, options = {}) {
         if (!importSizeChecker.withinLimits) {
             displayError(importSizeChecker.limitReason, { duration: 5000 });
