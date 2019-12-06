@@ -423,7 +423,7 @@ class DrawingModel extends M {
     let undo = this.objects.killObject(info.time, obj.id);
     this.history.push(new Action('clear', undo));
     this.removeSelection();
-    delete this.assets[obj.id];
+    // delete this.assets[obj.id];
     
     return {message: 'updateScreen'};
   }
@@ -456,7 +456,7 @@ class DrawingModel extends M {
     obj.addTransform(info.time, {message: 'new', transform: [1, 0, x, 0, 1, y]});
     this.objects.addObject(info.time, obj);
     this.history.push(new Action('addObject', obj));
-    this.assets[objectId] = info.assetDescriptor;
+    this.assets[objectId] = info;
     return {message: 'loadImage', assetDescriptor: info.assetDescriptor, objectId: objectId};
   }
 
@@ -592,14 +592,12 @@ class DrawingView extends V {
     this.elements.redoButton.classList.add('disabled');
 
     for (let k in this.model.assets) {
-      this.actuallyLoadImage(k, this.model.assets[k]);
+      this.loadImage(this.model.assets[k]);
     }
 
     if (this.model.videoAsset) {
-      this.loadVideo(this.model.videoAsset.assetDescriptor);
+      this.loadVideo(this.model.videoAsset);
     }
-
-    if (this.model.isPlaying) {console.log("it is already playing");}
   }
 
   synced(value) {
@@ -610,6 +608,12 @@ class DrawingView extends V {
       let video = this.maybeVideo;
       this.maybeVideo = null;
       this.loadVideo(video);
+    }
+    if (this.maybeAssets) {
+      for (let k in this.maybeAssets) {
+        this.loadImage(this.maybeAssets[k]);
+      }
+      this.maybeAssets = null;
     }
   }
 
@@ -883,6 +887,15 @@ class DrawingView extends V {
   }
 
   loadImage(info) {
+    if (!isLocal && !this.isSynced) {
+      console.log('not synced', info, this.videoView);
+      if (!this.maybeAssets) {
+        this.maybeAssets = {};
+      }
+      this.maybeAssets[info.objectId] = info;
+      return;
+    }
+
     this.actuallyLoadImage(info.objectId, info.assetDescriptor);
   }
 
@@ -907,10 +920,11 @@ class DrawingView extends V {
     }
 
     this.reset({width: info.width, height: info.height, duration: info.duration});
-    this.actuallyLoadVideo(info.assetDescriptor);
+    this.actuallyLoadVideo(info);
   }
 
-  async actuallyLoadVideo(assetDescriptor) {
+  async actuallyLoadVideo(info) {
+    let assetDescriptor = info.assetDescriptor;
     let okToGo = true; // unless cancelled by another load, or a shutdown
     //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
     this.abandonLoad = () => okToGo = false;
@@ -935,7 +949,7 @@ class DrawingView extends V {
         this.applyPlayState();
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
         this.elements.time.max = this.videoView.duration.toString();
-        
+        this.elements.time.valueAsNumber = this.pausedTime;
       })
       .catch(err => console.error(err));
     return {message: 'loadVideo', time: this.videoTime}
@@ -1101,20 +1115,20 @@ class DrawingView extends V {
   goStopPressed(info) {
     let now = this.now();
     let newPlaying = !this.model.isPlaying;
-    return {message: 'setPlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime};
+    return {message: 'setPlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
   }
 
   backwardPressed(info) {
     let videoTime = Math.max(this.videoTime - 0.1, 0);
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - videoTime, time: now};
+    return {message: 'setPlayState', startTime: now - videoTime, time: now, pausedTime: now};
   }
     
   forwardPressed(info) {
     let duration = this.videoView ? this.videoView.duration : 20;
     let videoTime = Math.min(this.videoTime + 0.1, duration);
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - videoTime, time: now};
+    return {message: 'setPlayState', startTime: now - videoTime, time: now, pauseTime: now};
   }
 
   setColor(name) {
