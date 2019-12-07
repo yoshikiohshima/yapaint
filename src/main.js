@@ -274,8 +274,8 @@ class DrawingModel extends M {
   actuallyReset() {
     this.objects = new Objects(newId());
     this.isPlaying = false;
-    this.startTime = null;
-    this.pausedTime = null;
+    this.startTime = 0;
+    this.pausedTime = 0;
 
     this.history = [];
     this.redoHistory = [];
@@ -473,7 +473,7 @@ class DrawingModel extends M {
     if (startTime !== undefined) {this.startTime = startTime;}
     if (pausedTime !== undefined) {this.pausedTime = pausedTime;}
 
-    return info;
+    return {message: 'setPlayState', isPlaying: this.isPlaying, startTime: this.startTime, pausedTime: this.pausedTime};
   }
 }
 
@@ -1113,22 +1113,35 @@ class DrawingView extends V {
   }
 
   goStopPressed(info) {
-    let now = this.now();
+    let now = this.now() / 1000;
     let newPlaying = !this.model.isPlaying;
-    return {message: 'setPlayState', isPlaying: newPlaying, startTime: (now / 1000) - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
+
+    return {message: 'setPlayState', isPlaying: newPlaying, startTime: now - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
   }
 
   backwardPressed(info) {
+    let startTime = this.model.startTime + 0.1;
     let videoTime = Math.max(this.videoTime - 0.1, 0);
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - videoTime, time: now, pausedTime: now};
+
+    if (this.model.isPlaying) {
+      return {message: 'setPlayState', startTime: startTime, time: now, pausedTime: 0};
+    } else {
+      return {message: 'setPlayState', startTime: 0, time: now, pausedTime: videoTime};
+    }
   }
     
   forwardPressed(info) {
     let duration = this.videoView ? this.videoView.duration : 20;
+    let startTime = this.model.startTime - 0.1;
     let videoTime = Math.min(this.videoTime + 0.1, duration);
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - videoTime, time: now, pauseTime: now};
+
+    if (this.model.isPlaying) {
+      return {message: 'setPlayState', startTime: startTime, time: now, pausedTime: 0};
+    } else {
+      return {message: 'setPlayState', startTime: 0, time: now, pausedTime: videoTime};
+    }
   }
 
   setColor(name) {
@@ -1244,17 +1257,19 @@ class DrawingView extends V {
   }
 
   setPlayState(info) {
-    if (info.time !== undefined && info.startTime !== undefined) {
+    if (info.isPlaying) {
       let now = this.now();
       let time = (now / 1000) - info.startTime;
       this.videoTime = time;
       if (this.videoView) {
-        this.videoView.video.currentTime = time;
-        if (this.model.isPlaying) {
-          this.videoView.play(this.videoTime);
-        } else {
-          this.videoView.pause(this.videoTime);
-        }
+        this.videoView.video.currentTime = this.videoTime;
+        this.videoView.play(this.videoTime);
+      }
+    } else {
+      this.videoTime = info.pausedTime;
+      if (this.videoView) {
+        this.videoView.video.currentTime = this.videoTime;
+        this.videoView.pause(this.videoTime);
       }
     }
     this.updateScreen({});
