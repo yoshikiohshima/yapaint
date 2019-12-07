@@ -505,6 +505,8 @@ class DrawingView extends V {
       'goStopPressed': 'goStopPressed',
       'backwardPressed': 'backwardPressed',
       'forwardPressed': 'forwardPressed',
+      'bigBackwardPressed': 'bigBackwardPressed',
+      'bigForwardPressed': 'bigForwardPressed',
       'timeChanged': 'timeChanged',
       'undoPressed': 'undoPressed',
       'redoPressed': 'redoPressed',
@@ -544,13 +546,17 @@ class DrawingView extends V {
       goStopHandler: (evt) => this.dispatch({message: 'goStopPressed'}),
       backwardHandler: (evt) => this.dispatch({message: 'backwardPressed'}),
       forwardHandler: (evt) => this.dispatch({message: 'forwardPressed'}),
+      bigBackwardHandler: (evt) => this.dispatch({message: 'bigBackwardPressed'}),
+      bigForwardHandler: (evt) => this.dispatch({message: 'bigForwardPressed'}),
       undoHandler: (evt) => this.dispatch({message: 'undoPressed'}),
       redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
       uploadHandler: (evt) => this.upload(evt),
+      joinHandler: (evt) => this.join(evt),
+      fullScreenHandler: (evt) => this.toggleFullScreen(evt),
     };
 
     this.elements = {};
-    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'readout', 'backstop', 'resizerPane', 'uploadButton'].forEach((n) => {
+    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'bigBackward', 'bigForward', 'readout', 'backstop', 'resizerPane', 'uploadButton', 'fullScreenButton'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
     });
 
@@ -574,11 +580,15 @@ class DrawingView extends V {
       ['time', 'change', 'timeHandler'],
       ['time', 'input', 'timeHandler'],
       ['goStop', 'click', 'goStopHandler'],
+      ['bigBackward', 'click', 'bigBackwardHandler'],
       ['backward', 'click', 'backwardHandler'],
       ['forward', 'click', 'forwardHandler'],
+      ['bigBackward', 'click', 'bigBackwardHandler'],
+      ['bigForward', 'click', 'bigForwardHandler'],
       ['undoButton', 'click', 'undoHandler'],
       ['redoButton', 'click', 'redoHandler'],
       ['uploadButton', 'click', 'uploadHandler'],
+      ['fullScreenButton', 'click', 'fullScreenHandler'],
     ];
 
     this.handlerMap.forEach((triple) => {
@@ -598,6 +608,9 @@ class DrawingView extends V {
     if (this.model.videoAsset) {
       this.loadVideo(this.model.videoAsset);
     }
+
+    this.launchPane = document.getElementById('launchPane');
+    this.launchPane.addEventListener("click", (evt) => this.join());
   }
 
   synced(value) {
@@ -615,6 +628,19 @@ class DrawingView extends V {
       }
       this.maybeAssets = null;
     }
+  }
+
+  showJoin() {
+    this.launchPane.style.setProperty("display", "flex");
+  }
+
+  join() {
+    this.launchPane.style.setProperty("display", "none");
+    this.playStateChanged({ isPlaying: this.model.isPlaying,
+                            startTime: this.model.startTime,
+                            pausedTime: this.model.pausedTime });
+
+    this.triggerJumpCheck();
   }
 
   detach() {
@@ -988,14 +1014,8 @@ class DrawingView extends V {
         if (playStarted) {
           // leave it a little time to stabilise          
           this.future(250).triggerJumpCheck();
-        } else if (!videoElem.muted) {
-          console.log(`trying with mute`);
-          videoElem.muted = true;
-          this.applyPlayState();
         } else {
-          console.log(`reverting to stepped display`);
-          this.isStepping = true;
-          this.stepWhileBlocked();
+          this.showJoin();
         }
       });
     }
@@ -1122,12 +1142,11 @@ class DrawingView extends V {
   backwardPressed(info) {
     let startTime = this.model.startTime + 0.1;
     let videoTime = Math.max(this.videoTime - 0.1, 0);
-    let now = this.now() / 1000;
 
     if (this.model.isPlaying) {
-      return {message: 'setPlayState', startTime: startTime, time: now, pausedTime: 0};
+      return {message: 'setPlayState', startTime: startTime, pausedTime: 0};
     } else {
-      return {message: 'setPlayState', startTime: 0, time: now, pausedTime: videoTime};
+      return {message: 'setPlayState', startTime: 0, pausedTime: videoTime};
     }
   }
     
@@ -1135,12 +1154,34 @@ class DrawingView extends V {
     let duration = this.videoView ? this.videoView.duration : 20;
     let startTime = this.model.startTime - 0.1;
     let videoTime = Math.min(this.videoTime + 0.1, duration);
-    let now = this.now() / 1000;
 
     if (this.model.isPlaying) {
-      return {message: 'setPlayState', startTime: startTime, time: now, pausedTime: 0};
+      return {message: 'setPlayState', startTime: startTime, pausedTime: 0};
     } else {
-      return {message: 'setPlayState', startTime: 0, time: now, pausedTime: videoTime};
+      return {message: 'setPlayState', startTime: 0, pausedTime: videoTime};
+    }
+  }
+
+  bigBackwardPressed(info) {
+    let startTime = Math.floor(this.model.startTime + 1);
+    let videoTime = Math.ceil(Math.max(this.videoTime - 1, 0));
+
+    if (this.model.isPlaying) {
+      return {message: 'setPlayState', startTime: startTime, pausedTime: 0};
+    } else {
+      return {message: 'setPlayState', startTime: 0, pausedTime: videoTime};
+    }
+  }
+
+  bigForwardPressed(info) {
+    let duration = this.videoView ? this.videoView.duration : 20;
+    let startTime = Math.ceil(this.model.startTime - 1);
+    let videoTime = Math.floor(Math.min(this.videoTime + 1), duration);
+
+    if (this.model.isPlaying) {
+      return {message: 'setPlayState', startTime: startTime, pausedTime: 0};
+    } else {
+      return {message: 'setPlayState', startTime: 0, pausedTime: videoTime};
     }
   }
 
@@ -1169,9 +1210,14 @@ class DrawingView extends V {
   }
 
   timeChanged(info) {
-    let videoTime = info.time;
+    let newTime = info.time;
+    let videoTime = this.videoTime;
+    let diff = newTime - videoTime;
+    let startTime = this.model.startTime + diff;
+    let pausedTime = this.model.isPlaying ? 0 : newTime;
+    
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime: now - videoTime, time: now};
+    return {message: 'setPlayState', startTime, time: now, pausedTime};
   }
 
   updateScreen(info) {
@@ -1256,14 +1302,22 @@ class DrawingView extends V {
     }
   }
 
-  setPlayState(info) {
+  async setPlayState(info) {
+    if (!this.synced) {return;}
     if (info.isPlaying) {
       let now = this.now();
       let time = (now / 1000) - info.startTime;
       this.videoTime = time;
       if (this.videoView) {
         this.videoView.video.currentTime = this.videoTime;
-        this.videoView.play(this.videoTime);
+        this.videoView.play(this.videoTime).then((playStarted) => {
+          if (playStarted) {
+            // leave it a little time to stabilise          
+            this.future(250).triggerJumpCheck();
+          } else {
+            this.showJoin();
+          }
+        });
       }
     } else {
       this.videoTime = info.pausedTime;
@@ -1382,6 +1436,40 @@ class DrawingView extends V {
       return gzurl;
     }
     return null;
+  }
+
+  toggleFullScreen() {
+    let req = this.content.requestFullscreen || this.content.webkitRequestFullscreen ||
+        this.content.mozRequestFullScreen || this.content.msRequestFullscreen;
+
+    if (req) {
+      req.call(this.content);
+
+      function fsChanged() {
+        if (document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement) {
+          /*
+            let rx = window.innerWidth / FW;
+            let ry = window.innerHeight / FH;
+            let fullScreenScale = Math.min(rx, ry);
+            this.content.style.width = FW * fullScreenScale + 'px';
+            this.content.style.height = FH * fullScreenScale + 'px';
+          */
+        } else {
+          /* let fullScreenScale = 1.0;
+             this.content.style.width = FW + 'px';
+             this.content.style.height = FH + 'px';
+          */
+        }
+      };
+
+      document.addEventListener("fullscreenchange", fsChanged);
+      document.addEventListener("webkitfullscreenchange", fsChanged);
+      document.addEventListener("mozfullscreenchange", fsChanged);
+      document.addEventListener("MSFullscreenChange", fsChanged);
+    }
   }
 }
 
@@ -1510,12 +1598,12 @@ async function start(name, file) {
   return Promise.resolve(isLocal ? 'local' : 'remote');
 }
 
-function editor(file, name) {
+async function editor(file, name) {
   if (!name) {
     name = newId();
     window.location.hash = name;
   }
-  start(name, file);
+  await start(name, file);
   drawContent.style.removeProperty("display");
   landingPage.style.setProperty("display", "none");
 }
