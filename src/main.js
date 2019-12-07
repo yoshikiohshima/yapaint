@@ -326,7 +326,9 @@ class DrawingModel extends M {
     if (isLocal) {
       session.view.dispatch(value);
     } else {
-      this.publish(this.id, "message-m", value);
+      if (!this.isSynced) {
+        this.publish(this.id, "message-m", value);
+      }
     }
   }
 
@@ -635,12 +637,14 @@ class DrawingView extends V {
   }
 
   join() {
-    this.launchPane.style.setProperty("display", "none");
+    this.applyPlayState(true);
+
     this.playStateChanged({ isPlaying: this.model.isPlaying,
                             startTime: this.model.startTime,
-                            pausedTime: this.model.pausedTime });
-
+                            pausedTime: this.model.pausedTime }, true);
     this.triggerJumpCheck();
+
+    this.launchPane.style.setProperty("display", "none");
   }
 
   detach() {
@@ -972,7 +976,7 @@ class DrawingView extends V {
         this.elements.backstop.appendChild(videoView.video);
         this.videoDescriptor = assetDescriptor;
 
-        this.applyPlayState();
+        this.applyPlayState(true);
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
         this.elements.time.max = this.videoView.duration.toString();
         this.elements.time.valueAsNumber = this.pausedTime;
@@ -981,20 +985,20 @@ class DrawingView extends V {
     return {message: 'loadVideo', time: this.videoTime}
   }
 
-  playStateChanged(rawData) {
+  playStateChanged(rawData, firstTime) {
     const data = { ...rawData }; // take a copy that we can play with
     this.latestActionSpec = data.actionSpec; // if any
     delete data.actionSpec;
 
     const latest = this.latestPlayState;
     // ignore if we've heard this one before (probably because we set it locally)
-    if (latest && Object.keys(data).every(key => data[key] === latest[key])) {return;}
+    if (!firstTime && (latest && Object.keys(data).every(key => data[key] === latest[key]))) {return;}
 
     this.latestPlayState = data;
     this.applyPlayState(); // will be ignored if we're still initialising
   }
 
-  applyPlayState() {
+  applyPlayState(firstTime) {
     if (!this.videoView) {return;}
 
     let videoView = this.videoView;
@@ -1003,9 +1007,7 @@ class DrawingView extends V {
     let now = this.now();
 
     console.log("apply playState", {...this.latestPlayState});
-    if (!this.latestPlayState.isPlaying) {
-      videoView.pause(this.latestPlayState.pausedTime);
-    } else {
+    if (firstTime || this.latestPlayState.isPlaying) {
       videoElem.playbackRate = 1 + this.playbackBoost * 0.01;
       this.lastRateAdjust = now; // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
       this.jumpIfNeeded = false;
@@ -1018,7 +1020,10 @@ class DrawingView extends V {
           this.showJoin();
         }
       });
+    } else {
+      videoView.pause(this.latestPlayState.pausedTime);
     }
+
     if (this.latestActionSpec) {this.revealAction(this.latestActionSpec);}
   }
 
@@ -1303,7 +1308,6 @@ class DrawingView extends V {
   }
 
   async setPlayState(info) {
-    if (!this.synced) {return;}
     if (info.isPlaying) {
       let now = this.now();
       let time = (now / 1000) - info.startTime;
@@ -1610,13 +1614,23 @@ async function editor(file, name) {
 
 function isMovieDrop(evt) {
   const dt = evt.dataTransfer;
-  return (dt && dt.types.length === 1 && dt.types[0] === "Files" && dt.items[0].type === "video/mp4");
+  if (dt && dt.types.length === 1 &&
+      dt.types[0] === "Files" && dt.items[0].type === "video/mp4") {
+    return 0;
+  }
+
+  if (dt && dt.types.length === 2 &&
+      dt.types[1] === "Files" && dt.items[0].type === "video/mp4") {
+    return 1;
+  }
+  return -1;
 }
 
 function drop(evt) {
   evt.preventDefault();
 
-  if (isMovieDrop(evt)) {
+  let ind = isMovieDrop(evt);
+  if (ind >= 0) {
     let item = evt.dataTransfer.items[0];
     let file = item.getAsFile();
     
@@ -1633,7 +1647,7 @@ function dragleave(evt) {
 
 function dragover(evt) {
   evt.preventDefault();
-  if (isMovieDrop(evt)) {
+  if (isMovieDrop(evt) >= 0) {
     initDrop.classList.add("hover");
   }
 }
