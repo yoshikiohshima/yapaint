@@ -326,9 +326,7 @@ class DrawingModel extends M {
     if (isLocal) {
       session.view.dispatch(value);
     } else {
-      if (!this.isSynced) {
-        this.publish(this.id, "message-m", value);
-      }
+      this.publish(this.id, "message-m", value);
     }
   }
 
@@ -636,12 +634,15 @@ class DrawingView extends V {
     this.launchPane.style.setProperty("display", "flex");
   }
 
-  join() {
-    this.applyPlayState(true);
+  async join() {
+    // cause play no matter what to grant the movie playing permission    
+    await this.applyPlayState(true);
 
-    this.playStateChanged({ isPlaying: this.model.isPlaying,
-                            startTime: this.model.startTime,
-                            pausedTime: this.model.pausedTime }, true);
+    // then, update its state
+    this.applyPlayState();
+    // this.playStateChanged({ isPlaying: this.model.isPlaying,
+    // startTime: this.model.startTime,
+    // pausedTime: this.model.pausedTime });
     this.triggerJumpCheck();
 
     this.launchPane.style.setProperty("display", "none");
@@ -681,6 +682,7 @@ class DrawingView extends V {
       if (isLocal) {
         session.model.dispatch(v);
       } else {
+        if (!this.isSynced) {return;}
         this.publish(this.modelId, "message", v);
       }
     });
@@ -958,10 +960,10 @@ class DrawingView extends V {
     let okToGo = true; // unless cancelled by another load, or a shutdown
     //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
     this.abandonLoad = () => okToGo = false;
-
-    this.playStateChanged({ isPlaying: this.model.isPlaying,
-                            startTime: this.model.startTime,
-                            pausedTime: this.model.pausedTime });
+    
+    // this.playStateChanged({ isPlaying: this.model.isPlaying,
+    // startTime: this.model.startTime,
+    // pausedTime: this.model.pausedTime });
     // will be stored for now, and may be overridden by messages in a backlog by the time the video is ready
 
     await assetManager.ensureAssetsAvailable(assetDescriptor)
@@ -976,11 +978,15 @@ class DrawingView extends V {
         this.elements.backstop.appendChild(videoView.video);
         this.videoDescriptor = assetDescriptor;
 
-        this.applyPlayState(true);
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
         this.elements.time.max = this.videoView.duration.toString();
         this.elements.time.valueAsNumber = this.pausedTime;
+        return;
       })
+      .then(() => {
+        return this.applyPlayState(true);
+      })
+      .then(() => this.applyPlayState())
       .catch(err => console.error(err));
     return {message: 'loadVideo', time: this.videoTime}
   }
@@ -994,25 +1000,26 @@ class DrawingView extends V {
     // ignore if we've heard this one before (probably because we set it locally)
     if (!firstTime && (latest && Object.keys(data).every(key => data[key] === latest[key]))) {return;}
 
-    this.latestPlayState = data;
-    this.applyPlayState(); // will be ignored if we're still initialising
+    if (this.isSynced) {
+      this.latestPlayState = data;
+    }
+    this.applyPlayState(firstTime); // will be ignored if we're still initialising
   }
 
   applyPlayState(firstTime) {
-    if (!this.videoView) {return;}
+    if (!this.videoView) {return Promise.resolve(null);}
 
     let videoView = this.videoView;
     let videoElem = videoView.video;
 
     let now = this.now();
 
-    console.log("apply playState", {...this.latestPlayState});
-    if (firstTime || this.latestPlayState.isPlaying) {
+    if (firstTime || this.model.isPlaying) {
       videoElem.playbackRate = 1 + this.playbackBoost * 0.01;
       this.lastRateAdjust = now; // make sure we don't adjust rate until playback has settled in, and after any emergency jump we decide to do
       this.jumpIfNeeded = false;
       // if the video is blocked from playing, enter a stepping mode in which we move the video forward with successive pause() calls
-      videoView.play(videoView.calculateVideoTime(now, this.model.startTime) + 0.1).then(playStarted => {
+      return videoView.play(videoView.calculateVideoTime(now, this.model.startTime) + 0.1).then(playStarted => {
         if (playStarted) {
           // leave it a little time to stabilise          
           this.future(250).triggerJumpCheck();
@@ -1021,10 +1028,9 @@ class DrawingView extends V {
         }
       });
     } else {
-      videoView.pause(this.latestPlayState.pausedTime);
+      videoView.pause(this.model.pausedTime);
+      return Promise.resolve(true);
     }
-
-    if (this.latestActionSpec) {this.revealAction(this.latestActionSpec);}
   }
 
   triggerJumpCheck() {
