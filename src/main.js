@@ -17,6 +17,8 @@ let assetManager =  new AssetManager();
 
 const VIEW_EARLY_DRAW = false;
 
+let fullScreenScale = 1;
+
 class FutureHandler {
   constructor(tOffset) {
     this.tOffset = tOffset || 0;
@@ -1455,23 +1457,20 @@ class DrawingView extends V {
     if (req) {
       req.call(this.content);
 
-      function fsChanged() {
+      let fsChanged = () => {
         if (document.fullscreenElement ||
             document.webkitFullscreenElement ||
             document.mozFullScreenElement ||
             document.msFullscreenElement) {
-          /*
-            let rx = window.innerWidth / FW;
-            let ry = window.innerHeight / FH;
-            let fullScreenScale = Math.min(rx, ry);
-            this.content.style.width = FW * fullScreenScale + 'px';
-            this.content.style.height = FH * fullScreenScale + 'px';
-          */
+          let rx = window.innerWidth / this.canvas.width;
+          let ry = window.innerHeight / this.canvas.height;
+          fullScreenScale = Math.min(rx, ry);
+          this.content.style.setProperty('transform-origin', 'top left');
+          this.content.style.setProperty('transform', `scale(${fullScreenScale});`);
         } else {
-          /* let fullScreenScale = 1.0;
-             this.content.style.width = FW + 'px';
-             this.content.style.height = FH + 'px';
-          */
+          fullScreenScale = 1.0;
+          this.content.style.removeProperty('transform-origin');
+          this.content.style.removeProperty('transform');
         }
       };
 
