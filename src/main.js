@@ -1598,6 +1598,7 @@ async function start(name, file) {
   if (isLocal) {
     session = makeMockReflector(DrawingModel, DrawingView);
   } else {
+    Croquet.App.sessionURL = window.location.href;
     Croquet.App.makeWidgetDock();
     session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
     if (file) {
@@ -1609,7 +1610,7 @@ async function start(name, file) {
 
 async function editor(file, name) {
   if (!name) {
-    name = newId();
+    name = newId(true);
     window.location.hash = name;
   }
   await start(name, file);

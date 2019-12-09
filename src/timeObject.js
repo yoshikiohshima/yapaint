@@ -2,12 +2,15 @@ function toKey(n) {
   return Math.trunc(n * 1000);
 }
 
-export function newId() {
+export function newId(isShort) {
   function hex() {
     let r = Math.random();
     return Math.floor(r * 256).toString(16).padStart(2, "0");
   }
-  return`${hex()}${hex()}${hex()}${hex()}`;
+  if (!isShort) {
+    return`${hex()}${hex()}${hex()}${hex()}`;
+  }
+  return`${hex()}${hex()}`;
 }
 
 function findIndexFor(timeKey, obj, low, high) { // low is inclusive high is exclusive
