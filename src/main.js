@@ -470,6 +470,8 @@ class DrawingModel extends M {
   }
 
   setPlayState(info) {
+    console.log('model setPlayState', info);
+    
     let {isPlaying, startTime, pausedTime} = info;
     if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
     if (startTime !== undefined) {this.startTime = startTime;}
@@ -818,6 +820,7 @@ class DrawingView extends V {
   }
 
   initDropVideo(file) {
+    this.initiator = true;
     if (file) {
       const dropPoint = {x: 0, y: 0};
       assetManager.handleFile(file, this.model, this, dropPoint);
@@ -960,14 +963,8 @@ class DrawingView extends V {
   async actuallyLoadVideo(info) {
     let assetDescriptor = info.assetDescriptor;
     let okToGo = true; // unless cancelled by another load, or a shutdown
-    //this.waitingForSync = !this.realm.isSynced; // this can flip back and forth
     this.abandonLoad = () => okToGo = false;
     
-    // this.playStateChanged({ isPlaying: this.model.isPlaying,
-    // startTime: this.model.startTime,
-    // pausedTime: this.model.pausedTime });
-    // will be stored for now, and may be overridden by messages in a backlog by the time the video is ready
-
     await assetManager.ensureAssetsAvailable(assetDescriptor)
       .then(() => assetManager.importVideo(assetDescriptor, false)) // false => not 3D
       .then(objectURL => new VideoInterface(objectURL).readyPromise)
@@ -982,13 +979,19 @@ class DrawingView extends V {
 
         this.lastTimingCheck = this.now() + 500; // let it settle before we try to adjust
         this.elements.time.max = this.videoView.duration.toString();
-        this.elements.time.valueAsNumber = this.pausedTime;
+        this.elements.time.valueAsNumber = this.pausedTime || 0;
         return;
       })
-      .then(() => {
-        return this.applyPlayState(true);
+      .then((playStarted) => {
+        if (playStarted) {
+          // leave it a little time to stabilise          
+          this.future(250).triggerJumpCheck();
+        } else {
+          if (!this.initiator) {
+            this.showJoin();
+          }
+        }
       })
-      .then(() => this.applyPlayState())
       .catch(err => console.error(err));
     return {message: 'loadVideo', time: this.videoTime}
   }
@@ -1149,7 +1152,7 @@ class DrawingView extends V {
     let now = this.now() / 1000;
     let newPlaying = !this.model.isPlaying;
 
-    return {message: 'setPlayState', isPlaying: newPlaying, startTime: now - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
+    return {message: 'setPlayState', weirdo: 'gostop', isPlaying: newPlaying, startTime: now - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
   }
 
   backwardPressed(info) {
@@ -1230,7 +1233,7 @@ class DrawingView extends V {
     let pausedTime = this.model.isPlaying ? 0 : newTime;
     
     let now = this.now() / 1000;
-    return {message: 'setPlayState', startTime, time: now, pausedTime};
+    return {message: 'setPlayState', weirdo: 'time', startTime, time: now, pausedTime};
   }
 
   updateScreen(info) {
@@ -1322,14 +1325,7 @@ class DrawingView extends V {
       this.videoTime = time;
       if (this.videoView) {
         this.videoView.video.currentTime = this.videoTime;
-        this.videoView.play(this.videoTime).then((playStarted) => {
-          if (playStarted) {
-            // leave it a little time to stabilise          
-            this.future(250).triggerJumpCheck();
-          } else {
-            this.showJoin();
-          }
-        });
+        this.videoView.play(this.videoTime);
       }
     } else {
       this.videoTime = info.pausedTime;
@@ -1353,12 +1349,12 @@ class DrawingView extends V {
       this.updateScreen({});
     } else {
       if (this.model.isPlaying) {
-        this.videoTime = (now / 1000) - this.model.startTime;
-        if (this.videoTime > 20) {
-          this.videoTime = 20;
-          this.dispatch({message: 'atEnd', isPlaying: false, pauseTime: this.videoTime});
-          return;
-        }
+        // this.videoTime = (now / 1000) - this.model.startTime;
+        //        if (this.videoTime > 20) {
+        // this.videoTime = 20;
+        // this.dispatch({message: 'atEnd', isPlaying: false, pauseTime: this.videoTime});
+        // return;
+        // }
         this.updateScreen({});
       }
     }
@@ -1480,6 +1476,18 @@ class DrawingView extends V {
       document.addEventListener("MSFullscreenChange", fsChanged);
     }
   }
+
+  resize() {
+    let rect = window.document.body.getBoundingClientRect();
+    
+    let rx = rect.width / this.canvas.width;
+    let ry = rect.height / this.canvas.height;
+    let scale = Math.min(rx, ry);
+    if (scale > 1.0) {return;}
+    fullScreenScale = scale;
+    this.content.style.setProperty('transform-origin', 'top left');
+    this.content.style.setProperty('transform', `scale(${fullScreenScale});`);
+  }
 }
 
 // VideoInterface is an interface over an HTML video element.
@@ -1490,6 +1498,11 @@ class VideoInterface {
     this.video = document.createElement("video");
     this.video.autoplay = false;
     this.video.loop = true;
+    this.video.setAttribute('webkit-playsinline', 'webkit-playsinline');
+    this.video.setAttribute('playsinline', 'playsinline');
+    this.video.setAttribute('playsinline', 'playsinline');
+    this.video.playsinline = true;
+    this.video.setAttribute('controls', 'controls');
     this.isPlaying = false;
     this.isBlocked = false; // unless we find out to the contrary, on trying to play
 
@@ -1593,7 +1606,6 @@ class VideoInterface {
   }
 }
 
-
 async function start(name, file) {
   if (isLocal) {
     session = makeMockReflector(DrawingModel, DrawingView);
@@ -1601,6 +1613,7 @@ async function start(name, file) {
     Croquet.App.sessionURL = window.location.href;
     Croquet.App.makeWidgetDock();
     session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
+    session.view.movieReady = false;
     if (file) {
       session.view.initDropVideo(file);
     }
@@ -1658,7 +1671,30 @@ function dragover(evt) {
   }
 }
 
+function detectMobile() {
+  return navigator.userAgent.match(/Android/i)
+    || navigator.userAgent.match(/webOS/i)
+    || navigator.userAgent.match(/iPhone/i)
+    || navigator.userAgent.match(/iPad/i)
+    || navigator.userAgent.match(/iPod/i)
+    || navigator.userAgent.match(/BlackBerry/i)
+    || navigator.userAgent.match(/Windows Phone/i);
+}
+
+function setResizeHandler() {
+  let mobile = detectMobile();
+  if (mobile) {
+    window.onresize = () => {
+      if (session) {
+        session.view.resize();
+      }
+    }
+  }
+}
+
 function init() {
+  setResizeHandler();
+  
   landingPage = document.getElementById("landing-page");
   drawContent = document.getElementById("draw-content");
   initDrop = document.getElementById("init-drop");
@@ -1686,3 +1722,4 @@ function init() {
 }
 
 init();
+
