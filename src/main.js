@@ -218,6 +218,7 @@ class DrawingModel extends M {
         read: (obj) => {
           let b = new Bitmap(obj.id);
           b.name = obj.name;
+          b.transform = obj.transform;
           b.keys = obj.keys;
           b.data = obj.data;
           return b;
@@ -231,6 +232,7 @@ class DrawingModel extends M {
         },
         read: (obj) => {
           let s = new Stroke(obj.id);
+          s.transform = obj.transform;
           s.keys = obj.keys;
           s.data = obj.data;
           return s;
@@ -246,6 +248,7 @@ class DrawingModel extends M {
           let t = new Transform();
           t.keys = obj.keys;
           t.data = obj.data;
+          return t;
         }
       },
       Objects: {
