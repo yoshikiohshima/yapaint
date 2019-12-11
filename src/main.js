@@ -10,6 +10,8 @@ let initDrop;
 
 let isLocal = false;
 let session;
+let hadControl = false;
+let lastControl = false;
 
 let bitmaps = {};
 
@@ -299,18 +301,18 @@ class DrawingModel extends M {
       'clear': 'clear',
       'reset': 'reset',
       'delete': 'delete',
+      'moveToOrigin': 'moveToOrigin',
       'undo': 'undo',
       'redo': 'redo',
       'select': 'select',
       'unselect': 'unselect',
       // ---
-      'seek': 'seek',
       'addImage': 'addImage',
       'loadImage': 'loadImage',
       'addVideo': 'addVideo',
       'loadVideo': 'loadVideo',
       'setPlayState': 'setPlayState',
-      'updateTime': 'updateTime',
+      'control': 'control',
     };
 
     this.subscribe(this.sessionId, "view-join", this.viewJoin);
@@ -333,6 +335,14 @@ class DrawingModel extends M {
     }
   }
 
+  viewJoin(viewId) {
+    window.model = this;
+    console.log();
+  }
+
+  viewExit(viewId) {
+  }
+
   addSelection(userId, obj) {
     this.selections[userId] = obj;
   }
@@ -344,13 +354,6 @@ class DrawingModel extends M {
       this.selections = {};
     }
   }
-
-  viewJoin(viewId) {
-    window.model = this;
-    console.log();
-  }
-
-  viewExit(viewId) {}
 
   beginStroke(info) {
     this.removeSelection(info.userId);
@@ -376,6 +379,7 @@ class DrawingModel extends M {
   }
 
   reframe(info) {
+    console.log("reframe", info);
     let obj = this.objects.get(info.time, info.objectId);
     if (!obj) {return;} // it is possible that another client just has cleared this object
 
@@ -384,6 +388,7 @@ class DrawingModel extends M {
   }
 
   finishReframe(info) {
+    console.log("finishreframe", info);
     let obj = this.objects.get(info.time, info.objectId);
     if (!obj) {return;}
 
@@ -429,6 +434,39 @@ class DrawingModel extends M {
     // delete this.assets[obj.id];
     
     return {message: 'updateScreen'};
+  }
+
+  moveToOrigin(info) {
+    let obj = this.selections[info.userId];
+    if (!obj) {return undefined;}
+
+    let oldTransform = obj.transform.get(info.time).transform;    
+
+    let newInfo = {
+      message: 'reframe',
+      firstReframe: true,
+      transform: [1, 0, 0, 0, 1, 0],
+      objectId: obj.id,
+      userId: info.userId,
+      time: info.time
+    };
+
+    obj.reframe(info.time, newInfo);
+    newInfo.firstReframe = false;
+    obj.reframe(info.time, newInfo);
+
+    let finishInfo = {
+      message: 'finishReframe',
+      transform: oldTransform,
+      objectId: obj.id,
+      width: info.width,
+      height: info.height,
+      time: info.time
+    };
+
+    let action = obj.finishReframe(info.time, finishInfo);
+    this.history.push(action);
+    return {message: 'updateScreen', dontUpdateButtons: true};
   }
 
   undo(info) {
@@ -478,6 +516,10 @@ class DrawingModel extends M {
 
     return {message: 'setPlayState', isPlaying: this.isPlaying, startTime: this.startTime, pausedTime: this.pausedTime};
   }
+
+  control(info) {
+    return info;
+  }
 }
 
 DrawingModel.register();
@@ -523,6 +565,8 @@ class DrawingView extends V {
       'setPlayState': 'setPlayState',
       'atEnd': 'atEnd',
       'reset': 'reset',
+      'controlPressed': 'controlPressed',
+      'control': 'control',
     };
 
     this.subscribe(this.modelId, "message-m", this.dispatch);
@@ -555,12 +599,17 @@ class DrawingView extends V {
       redoHandler: (evt) => this.dispatch({message: 'redoPressed'}),
       uploadHandler: (evt) => this.upload(evt),
       joinHandler: (evt) => this.join(evt),
+      toggleControlHandler: (evt) => this.dispatch({message: 'controlPressed'}),
       fullScreenHandler: (evt) => this.toggleFullScreen(evt),
     };
 
     this.elements = {};
-    ['body', 'canvas', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'bigBackward', 'bigForward', 'readout', 'backstop', 'resizerPane', 'uploadButton', 'fullScreenButton'].forEach((n) => {
+    ['body', 'canvas', 'colors', 'clearButton', 'resetButton', 'eraser', 'black', 'blue', 'red', 'undoButton', 'redoButton', 'time', 'goStop', 'forward', 'backward', 'bigBackward', 'bigForward', 'readout', 'backstop', 'resizerPane', 'uploadButton', 'fullScreenButton', 'control'].forEach((n) => {
       this.elements[n] = (n === 'body') ? document.querySelector('#' + n) : this.content.querySelector('#' +  n);
+    });
+
+    ['launchPane', 'joinButton', 'hiddenJoinButton'].forEach((n) => {
+      this.elements[n] = document.querySelector('#' + n);
     });
 
     this.handlerMap = [
@@ -595,9 +644,13 @@ class DrawingView extends V {
       ['redoButton', 'click', 'redoHandler'],
       ['uploadButton', 'click', 'uploadHandler'],
       ['fullScreenButton', 'click', 'fullScreenHandler'],
+      ['control', 'click', 'toggleControlHandler'],
+      ['joinButton', 'click', 'joinHandler'],
+      ['hiddenJoinButton', 'click', 'joinHandler'],
     ];
 
     this.handlerMap.forEach((triple) => {
+      if (!this.elements[triple[0]]) {console.log(triple);}
       this.elements[triple[0]].addEventListener(triple[1], this.handlers[triple[2]]);
     });
 
@@ -615,10 +668,19 @@ class DrawingView extends V {
       this.loadVideo(this.model.videoAsset);
     }
 
-    this.launchPane = document.getElementById('launchPane');
-    this.launchPane.addEventListener("click", (evt) => this.join());
+    // this.launchPane = document.getElementById('launchPane');
+    // this.launchPane.addEventListener("click", (evt) => this.join());
 
     this.setupToggleFullScreen();
+    this.hasControl = false;
+  }
+
+  updateControl(master) {
+    if (master) {
+      this.elements.control.style.removeProperty("display");
+    } else {
+      this.elements.control.style.setProperty("display", "none");
+    }
   }
 
   synced(value) {
@@ -639,10 +701,16 @@ class DrawingView extends V {
   }
 
   showJoin() {
-    this.launchPane.style.setProperty("display", "flex");
+    this.elements.launchPane.style.setProperty("display", "flex");
   }
 
-  async join() {
+  async join(evt) {
+    let master = evt.target === this.elements.hiddenJoinButton;
+    hadControl = master;
+    this.hasControl = master;
+    this.updateControl(master);
+    this.control({allow: master});
+    
     // cause play no matter what to grant the movie playing permission    
     await this.applyPlayState(true);
 
@@ -653,7 +721,7 @@ class DrawingView extends V {
     // pausedTime: this.model.pausedTime });
     this.triggerJumpCheck();
 
-    this.launchPane.style.setProperty("display", "none");
+    this.elements.launchPane.style.setProperty("display", "none");
   }
 
   detach() {
@@ -697,13 +765,38 @@ class DrawingView extends V {
       if (isLocal) {
         session.model.dispatch(v);
       } else {
-        if (!this.isSynced) {return;}
         this.publish(this.modelId, "message", v);
       }
     });
   }
 
+  controlPressed() {
+    lastControl = !lastControl;
+    return {message: 'control', allow: lastControl};
+  }
+    
+  control(info) {
+    this.hasControl = info.allow || hadControl;
+
+    if (this.hasControl) {
+      this.elements.colors.style.setProperty("display", "flex");
+      this.elements.goStop.style.removeProperty("display");
+      this.elements.bigBackward.style.removeProperty("display");
+      this.elements.backward.style.removeProperty("display");
+      this.elements.forward.style.removeProperty("display");
+      this.elements.bigForward.style.removeProperty("display");
+    } else {
+      this.elements.colors.style.setProperty("display", "none");
+      this.elements.goStop.style.setProperty("display", "none");
+      this.elements.bigBackward.style.setProperty("display", "none");
+      this.elements.backward.style.setProperty("display", "none");
+      this.elements.forward.style.setProperty("display", "none");
+      this.elements.bigForward.style.setProperty("display", "none");
+    }
+  }
+
   mouseDown(evt) {
+    if (!this.hasControl) {return;}
     this.lastPoint = {userId: this.viewId, x: evt.offsetX, y: evt.offsetY, shiftKey: evt.shiftKey};
 
     let {x, y, shiftKey, userId} = this.lastPoint;
@@ -753,7 +846,8 @@ class DrawingView extends V {
   }
 
   mouseMove(evt) {
-    if (!this.lastPoint) {return undefined;}
+    if (!this.hasControl) {return;}
+    if (!this.lastPoint) {return;}
     let userId = this.viewId;
     
     let newPoint = {userId, x: evt.offsetX, y: evt.offsetY};
@@ -794,6 +888,7 @@ class DrawingView extends V {
   }
 
   mouseUp(evt) {
+    if (!this.hasControl) {return;}
     let strokeId = this.strokeId;
     let moveSelection = this.moveSelection;
     let movePoint = this.movePoint;
@@ -811,9 +906,15 @@ class DrawingView extends V {
   }
 
   keyboard(evt) {
+    if (!this.hasControl) {return;}
     if (evt.key === "Backspace" || evt.key === "Delete") {
       evt.origEvent.preventDefault();
       return {message: "delete", userId: this.viewId, time: this.videoTime};
+    }
+
+    if (evt.key === " ") {
+      evt.origEvent.preventDefault();
+      return {message: "moveToOrigin", userId: this.viewId, time: this.videoTime};
     }
 
     if (evt.key === 'z' && (evt.metaKey || evt.ctrlKey)) {
@@ -1238,6 +1339,7 @@ class DrawingView extends V {
   }
 
   timeChanged(info) {
+    if (!this.hasControl) {return;}
     let newTime = info.time;
     let videoTime = this.videoTime;
     let diff = newTime - videoTime;
@@ -1331,6 +1433,8 @@ class DrawingView extends V {
   }
 
   async setPlayState(info) {
+    if (!this.isSynced) {return;}
+    
     if (info.isPlaying) {
       let now = this.now();
       let time = (now / 1000) - info.startTime;
@@ -1663,7 +1767,11 @@ class VideoInterface {
   }
 }
 
-async function start(name, file) {
+async function start(file, name, master) {
+  if (window.location.hash === "") {
+    window.location.hash = name;
+  }
+  
   if (isLocal) {
     session = makeMockReflector(DrawingModel, DrawingView);
   } else {
@@ -1671,26 +1779,28 @@ async function start(name, file) {
     if (!detectMobile()) {
       Croquet.App.makeWidgetDock();
     }
-    session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
-    session.view.movieReady = false;
-
+    session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3", autoSleep: false});
     let dock = document.querySelector('#croquet_dock');
     if (dock) {
       dock.style.setProperty('position', 'fixed');
     }
+
     if (file) {
       session.view.initDropVideo(file);
+      hadControl = true;
+      session.view.hasControl = true;
+      session.view.updateControl(true);
+      session.view.control({allow: true});
     }
   }
   return Promise.resolve(isLocal ? 'local' : 'remote');
 }
 
-async function editor(file, name) {
+async function editor(file, name, master) {
   if (!name) {
     name = newId(true);
-    window.location.hash = name;
   }
-  await start(name, file);
+  await start(file, name, master);
   drawContent.style.removeProperty("display");
   landingPage.style.setProperty("display", "none");
 }
@@ -1717,7 +1827,7 @@ function drop(evt) {
     let item = evt.dataTransfer.items[0];
     let file = item.getAsFile();
     
-    editor(file);
+    editor(file, null, true);
   } else {
     console.log("unknown drop type");
   }
@@ -1763,22 +1873,24 @@ function init() {
   drawContent = document.getElementById("draw-content");
   initDrop = document.getElementById("init-drop");
 
-  let reg = /.*\/#([0-9a-f]+)/;
+  let reg = /.*#([0-9a-f]+)/;
   let match = reg.exec(window.location.href);
-  let name;
-  if (match) {
-    name = match[1];
-  }
+  let name = match ? match[1] : null;
+
+  //  let masterReg = /.*\?master=true/;
+  // let master = masterReg.test(window.location.href);
 
   if (name) {
     editor(null, name);
     return;
   }
 
-  let startButton = document.getElementById("startButton");
   drawContent.style.setProperty("display", "none");
+  landingPage.style.setProperty("display", "flex");
 
+  let startButton = document.getElementById("startButton");
   startButton.addEventListener("click", (evt) => editor(null));
+
   initDrop.addEventListener("drop", (evt) => drop(evt));
   initDrop.addEventListener("dragover", (evt) => dragover(evt));
   initDrop.addEventListener("dragleave", (evt) => dragleave(evt));
@@ -1786,4 +1898,3 @@ function init() {
 }
 
 init();
-

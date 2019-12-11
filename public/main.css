@@ -71,11 +71,23 @@
     font-size: 60px;
     background-color: white;
     border: 2px solid gray;
-    margin: 0auto;
+    margin: auto;
     padding: 40px;
     position: relative;
     height: fit-content;
 }
+
+.hiddenJoinButton {
+    font-size: 60px;
+    background-color: #00000005;
+    color: #00000000;
+    border: 0px;
+    bottom: 10px;
+    margin: auto;
+    padding: 40px;
+    position: absolute;
+}
+
 
 .trash {
   background-repeat: no-repeat;

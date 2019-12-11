@@ -12,7 +12,7 @@
 </head>
 
 <body id="body">
-  <div id="landing-page" style="display: flex; flex-direction: column">
+  <div id="landing-page" style="display: none; flex-direction: column">
     <span id='init-drop' class="drop_zone">drop a mp4 movie file</span>
     <span>OR</span>
     <button id="startButton" class="startButton">click here to draw without a movie</button>
@@ -21,7 +21,11 @@
   <div id="scaler" style="background-color: white;">
     <div id="draw-content" style="background-color: white;">
       <div style="display: flex">
-	<div>Movie Animator</div><button title="upload" id="uploadButton">Upload!</button><button title="fullscreen" id="fullScreenButton">Full Screen!</button>
+	<div>Movie Animator</div>
+	<div style="flex-grow: 1;"></div>
+	<button title="upload" id="uploadButton" style="display: none">Upload!</button>
+	<button title="fullscreen" id="fullScreenButton">Full Screen!</button>
+	<button title="toggle control" id="control" style="display: none;">Grant Control</button>
       </div>
       <div style="display: flex">
 	<div id="backstop" style="position: relative; width: 500px; height: 500px; border: 1px solid red; overflow: hidden"></div>
@@ -48,10 +52,12 @@
 	<button id="forward" style="flex-grow: 0; width: 25px;"></button>
 	<button id="bigForward" style="flex-grow: 0; width: 25px;"></button>
 	<div id="readout" style="flex-grow: 0; width: 40px">0</div>
-      </div> 
+      </div>
+      <div id="spacer" style="height: 40px; background-color: #cccccc"></div>
     </div>
     <div id="launchPane" class="gray" style="display: none;">
       <button id="joinButton" class="joinButton">Join</button>
+      <button id="hiddenJoinButton" class="hiddenJoinButton">Hidden</button>
     </div>
   </div>
   <script src='bundle.js'></script>
