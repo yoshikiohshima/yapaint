@@ -3,6 +3,7 @@
 <head>
 	<meta charset='utf8'>
 	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="format-detection" content="telephone=no">
 	<title>Yet Another Paint</title>
 	<link rel='stylesheet' type="text/css" href='main.css'>
 
@@ -17,40 +18,41 @@
     <button id="startButton" class="startButton">click here to draw without a movie</button>
   </div>
 
-  
-  <div id="draw-content" style="background-color: white;">
-    <div style="display: flex">
-      <div>Movie Animator</div><button title="upload" id="uploadButton">Upload!</button><button title="fullscreen" id="fullScreenButton">Full Screen!</button>
-    </div>
-    <div style="display: flex">
-      <div id="backstop" style="position: relative; width: 500px; height: 500px; border: 1px solid red; overflow: hidden"></div>
-      <div id="compound" style="position: absolute; left: 0px; right: 0px;">
-	<canvas id="canvas" width=500 height=500 style="border: 1px solid black; position: absolute"></canvas>
-	<div id="resizerPane" class="resizerPane"></div>
+  <div id="scaler" style="background-color: white;">
+    <div id="draw-content" style="background-color: white;">
+      <div style="display: flex">
+	<div>Movie Animator</div><button title="upload" id="uploadButton">Upload!</button><button title="fullscreen" id="fullScreenButton">Full Screen!</button>
       </div>
-      <div id="colors" class="colors" style="display: flex; flex-direction: column">
-	<button title="reset" id="resetButton" class="color-dot trash grow"></button>
-	<button id="black" class="color-dot grow" style="background-color: black"/>
-	<button id="blue" class="color-dot grow" style="background-color: blue"/>
-	<button id="red" class="color-dot grow" style="background-color: red"/>
-	<button title="eraser" id="eraser" class="color-dot eraser grow"></button>
-	<button title="undo" id="undoButton" class="color-dot undo grow"></button>
-	<button title="redo" id="redoButton" class="color-dot redo grow"></button>
-	<button title="clear" id="clearButton" class="color-dot trash grow"></button>
+      <div style="display: flex">
+	<div id="backstop" style="position: relative; width: 500px; height: 500px; border: 1px solid red; overflow: hidden"></div>
+	<div id="compound" style="position: absolute; left: 0px; right: 0px;">
+	  <canvas id="canvas" width=500 height=500 style="border: 1px solid black; position: absolute"></canvas>
+	  <div id="resizerPane" class="resizerPane"></div>
+	</div>
+	<div id="colors" class="colors" style="display: flex; flex-direction: column">
+	  <button title="reset" id="resetButton" class="color-dot trash grow"></button>
+	  <button id="black" class="color-dot grow" style="background-color: black"/>
+	  <button id="blue" class="color-dot grow" style="background-color: blue"/>
+	  <button id="red" class="color-dot grow" style="background-color: red"/>
+	  <button title="eraser" id="eraser" class="color-dot eraser grow"></button>
+	  <button title="undo" id="undoButton" class="color-dot undo grow"></button>
+	  <button title="redo" id="redoButton" class="color-dot redo grow"></button>
+	  <button title="clear" id="clearButton" class="color-dot trash grow"></button>
+	</div>
       </div>
+      <div style="display: flex; width: 500px;">
+	<button id="goStop" style="flex-grow: 0; width: 45px;">Go</button>
+	<button id="bigBackward" style="flex-grow: 0; width: 25px;"></button>
+	<button id="backward" style="flex-grow: 0; width: 25px;"></button>
+	<input id="time" type="range" min=0 max=20 step=0.001 style="flex-grow: 1;"></input>
+	<button id="forward" style="flex-grow: 0; width: 25px;"></button>
+	<button id="bigForward" style="flex-grow: 0; width: 25px;"></button>
+	<div id="readout" style="flex-grow: 0; width: 40px">0</div>
+      </div> 
     </div>
-    <div style="display: flex; width: 500px;">
-      <button id="goStop" style="flex-grow: 0; width: 45px;">Go</button>
-      <button id="bigBackward" style="flex-grow: 0; width: 25px;"></button>
-      <button id="backward" style="flex-grow: 0; width: 25px;"></button>
-      <input id="time" type="range" min=0 max=20 step=0.001 style="flex-grow: 1;"></input>
-      <button id="forward" style="flex-grow: 0; width: 25px;"></button>
-      <button id="bigForward" style="flex-grow: 0; width: 25px;"></button>
-      <div id="readout" style="flex-grow: 0; width: 40px">0</div>
-    </div> 
-  </div>
-  <div id="launchPane" class="gray" style="display: none;">
-    <button id="joinButton" class="joinButton">Join</button>
+    <div id="launchPane" class="gray" style="display: none;">
+      <button id="joinButton" class="joinButton">Join</button>
+    </div>
   </div>
   <script src='bundle.js'></script>
 </body>

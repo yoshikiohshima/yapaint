@@ -17,8 +17,6 @@ let assetManager =  new AssetManager();
 
 const VIEW_EARLY_DRAW = false;
 
-let fullScreenScale = 1;
-
 class FutureHandler {
   constructor(tOffset) {
     this.tOffset = tOffset || 0;
@@ -473,8 +471,6 @@ class DrawingModel extends M {
   }
 
   setPlayState(info) {
-    console.log('model setPlayState', info);
-    
     let {isPlaying, startTime, pausedTime} = info;
     if (isPlaying !== undefined) {this.isPlaying = isPlaying;}
     if (startTime !== undefined) {this.startTime = startTime;}
@@ -618,6 +614,8 @@ class DrawingView extends V {
 
     this.launchPane = document.getElementById('launchPane');
     this.launchPane.addEventListener("click", (evt) => this.join());
+
+    this.setupToggleFullScreen();
   }
 
   synced(value) {
@@ -996,6 +994,7 @@ class DrawingView extends V {
         }
       })
       .catch(err => console.error(err));
+    this.resize();
     return {message: 'loadVideo', time: this.videoTime}
   }
 
@@ -1449,47 +1448,92 @@ class DrawingView extends V {
     return null;
   }
 
+  setupToggleFullScreen() {
+
+    this.fullScreenScale = 1;
+
+    this.fullScreenFunction = this.content.requestFullscreen ||
+        this.content.webkitRequestFullscreen ||
+        this.content.mozRequestFullScreen ||
+        this.content.msRequestFullscreen;
+
+    this.exitFullScreenFunction = document.exitFullscreen ||
+      document.mozCancelFullScreen ||
+      document.webkitExitFullscreen ||
+      document.msExitFullscreen;
+
+    let fsChanged = () => {
+      this.fullScreenChanged();
+    }
+
+    document.addEventListener("fullscreenchange", fsChanged);
+    document.addEventListener("webkitfullscreenchange", fsChanged);
+    document.addEventListener("mozfullscreenchange", fsChanged);
+    document.addEventListener("MSFullscreenChange", fsChanged);
+  }
+
+  isFullScreen() {
+    return document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement;
+  }
+
+  fullScreenChanged() {
+    if (this.isFullScreen()) {
+      let w = window.innerWidth - 80;
+      let h = window.innerHeight - 80;
+      
+      let rx = w / this.canvas.width;
+      let ry = h / this.canvas.height;
+      this.fullScreenScale = Math.min(rx, ry);
+      this.content.style.setProperty('transform-origin', 'top left');
+      this.content.style.removeProperty('width');
+      this.content.style.removeProperty('height');
+      this.content.style.webkitTransform = `scale(${this.fullScreenScale})`;
+      this.content.style.transform = `scale(${this.fullScreenScale})`;
+    } else {
+      this.fullScreenScale = 1.0;
+      this.content.style.removeProperty('transform-origin');
+      this.content.style.webkitTransform = '';
+      this.content.style.transform = '';
+    }
+  }
+    
   toggleFullScreen() {
-    let req = this.content.requestFullscreen || this.content.webkitRequestFullscreen ||
-        this.content.mozRequestFullScreen || this.content.msRequestFullscreen;
-
-    if (req) {
-      req.call(this.content);
-
-      let fsChanged = () => {
-        if (document.fullscreenElement ||
-            document.webkitFullscreenElement ||
-            document.mozFullScreenElement ||
-            document.msFullscreenElement) {
-          let rx = window.innerWidth / this.canvas.width;
-          let ry = window.innerHeight / this.canvas.height;
-          fullScreenScale = Math.min(rx, ry);
-          this.content.style.setProperty('transform-origin', 'top left');
-          this.content.style.setProperty('transform', `scale(${fullScreenScale});`);
-        } else {
-          fullScreenScale = 1.0;
-          this.content.style.removeProperty('transform-origin');
-          this.content.style.removeProperty('transform');
-        }
-      };
-
-      document.addEventListener("fullscreenchange", fsChanged);
-      document.addEventListener("webkitfullscreenchange", fsChanged);
-      document.addEventListener("mozfullscreenchange", fsChanged);
-      document.addEventListener("MSFullscreenChange", fsChanged);
+    if (!this.isFullScreen()) {
+      if (this.fullScreenFunction) {
+        this.fullScreenFunction.call(document.getElementById('scaler'));
+      }
+    } else {
+      if (this.exitFullScreenFunction) {
+        this.exitFullScreenFunction.call(document);
+      }
     }
   }
 
   resize() {
     let rect = window.document.body.getBoundingClientRect();
+
+    let w = Math.max(window.innerWidth, rect.width) - 30;
+    let h = Math.max(window.innerHeight, rect.height) - 30;
     
-    let rx = rect.width / this.canvas.width;
-    let ry = rect.height / this.canvas.height;
+    let rx = w / this.canvas.width;
+    let ry = h / this.canvas.height;
     let scale = Math.min(rx, ry);
+    this.content.style.setProperty('width', w + 'px');
+    this.content.style.setProperty('height', h + 'px');
     if (scale > 1.0) {return;}
-    fullScreenScale = scale;
+    this.fullScreenScale = scale;
     this.content.style.setProperty('transform-origin', 'top left');
-    this.content.style.setProperty('transform', `scale(${fullScreenScale});`);
+    this.content.style.setProperty('transform', `scale(${this.fullScreenScale});`);
+    this.content.style.webkitTransform = `scale(${this.fullScreenScale});`;
+    // this.canvas.style.setProperty('transform-origin', 'top left');
+    // this.canvas.style.setProperty('transform', `scale(${fullScreenScale});`);
+    if (this.videoView && this.videoView.video) {
+      // this.videoView.video.style.setProperty('transform-origin', 'top left');
+      // this.videoView.video.style.setProperty('transform', `scale(${fullScreenScale});`);
+    }
   }
 }
 
@@ -1617,6 +1661,11 @@ async function start(name, file) {
     Croquet.App.makeWidgetDock();
     session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
     session.view.movieReady = false;
+
+    let dock = document.querySelector('#croquet_dock');
+    if (dock) {
+      dock.style.setProperty('position', 'fixed');
+    }
     if (file) {
       session.view.initDropVideo(file);
     }

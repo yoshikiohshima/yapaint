@@ -587,6 +587,7 @@ export class AssetManager {
 
     async importVideo(assetDescriptor) {
         const urlObj = await this.objectURLForName(assetDescriptor, "source");
+        console.log('importVideo', urlObj);
         return urlObj.url;
     }
 }
