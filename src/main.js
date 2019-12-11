@@ -568,8 +568,11 @@ class DrawingView extends V {
       ['body', 'keydown', 'keyboard'],
       ['body', 'input', 'keyboard'],
       ['canvas', 'mousedown', 'mousedown'],
+      ['canvas', 'touchstart', 'mousedown'],
       ['canvas', 'mousemove', 'mousemove'],
+      ['canvas', 'touchmove', 'mousemove'],
       ['canvas', 'mouseup', 'mouseup'],
+      ['canvas', 'touchend', 'mouseup'],
       ['canvas', 'drop', 'drop'],
       ['canvas', 'dragenter', 'drag'],
       ['canvas', 'dragover', 'drag'],
@@ -671,8 +674,15 @@ class DrawingView extends V {
 
   cookEvent(evt) {
     if (evt.key === undefined) {
-      return {touches: evt.touches, screenX: evt.screenX, screenY: evt.screenY,
-              offsetX: evt.offsetX, offsetY: evt.offsetY, shiftKey: evt.shiftKey, origEvent: evt};
+      let theEvt = evt.touches && evt.touches[0] ? evt.touches[0] : evt;
+      let screenX = theEvt.screenX;
+      let screenY = theEvt.screenY;
+      let offsetX = theEvt.offsetX !== undefined ? theEvt.offsetX : theEvt.clientX;
+      let offsetY = theEvt.offsetY !== undefined ? theEvt.offsetY : theEvt.clientY;
+      evt.preventDefault();
+      
+      return {touches: evt.touches, screenX: screenX, screenY: screenY,
+              offsetX: offsetX, offsetY: offsetY, shiftKey: evt.shiftKey, origEvent: evt};
     }
     return {key: evt.key, metaKey: evt.metaKey, altKey: evt.altKey, ctrlKey: evt.ctrlKey, shiftKey: evt.shiftKey, origEvent: evt};
   }
@@ -1481,8 +1491,8 @@ class DrawingView extends V {
 
   fullScreenChanged() {
     if (this.isFullScreen()) {
-      let w = window.innerWidth - 80;
-      let h = window.innerHeight - 80;
+      let w = window.innerWidth - 100;
+      let h = window.innerHeight - 100;
       
       let rx = w / this.canvas.width;
       let ry = h / this.canvas.height;
@@ -1515,8 +1525,8 @@ class DrawingView extends V {
   resize() {
     let rect = window.document.body.getBoundingClientRect();
 
-    let w = Math.max(window.innerWidth, rect.width) - 30;
-    let h = Math.max(window.innerHeight, rect.height) - 30;
+    let w = Math.max(window.innerWidth, rect.width) - 50;
+    let h = Math.max(window.innerHeight, rect.height) - 50;
     
     let rx = w / this.canvas.width;
     let ry = h / this.canvas.height;
@@ -1658,7 +1668,9 @@ async function start(name, file) {
     session = makeMockReflector(DrawingModel, DrawingView);
   } else {
     Croquet.App.sessionURL = window.location.href;
-    Croquet.App.makeWidgetDock();
+    if (!detectMobile()) {
+      Croquet.App.makeWidgetDock();
+    }
     session = await Croquet.startSession(name, DrawingModel, DrawingView, {tps: "10x3"});
     session.view.movieReady = false;
 
