@@ -1265,7 +1265,7 @@ class DrawingView extends V {
     let now = this.now() / 1000;
     let newPlaying = !this.model.isPlaying;
 
-    return {message: 'setPlayState', weirdo: 'gostop', isPlaying: newPlaying, startTime: now - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
+    return {message: 'setPlayState', isPlaying: newPlaying, startTime: now - this.videoTime, time: this.videoTime, pausedTime: this.videoTime};
   }
 
   backwardPressed(info) {
@@ -1343,11 +1343,11 @@ class DrawingView extends V {
     let newTime = info.time;
     let videoTime = this.videoTime;
     let diff = newTime - videoTime;
-    let startTime = this.model.startTime + diff;
+    let startTime = this.model.startTime - diff;
     let pausedTime = this.model.isPlaying ? 0 : newTime;
     
     let now = this.now() / 1000;
-    return {message: 'setPlayState', weirdo: 'time', startTime, time: now, pausedTime};
+    return {message: 'setPlayState', startTime, time: now, pausedTime};
   }
 
   updateScreen(info) {
