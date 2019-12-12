@@ -778,6 +778,8 @@ class DrawingView extends V {
   control(info) {
     this.hasControl = info.allow || hadControl;
 
+    this.elements.control.textContent = lastControl ? 'Revoke Control' : 'Grant Control';
+
     if (this.hasControl) {
       this.elements.colors.style.setProperty("display", "flex");
       this.elements.goStop.style.removeProperty("display");
