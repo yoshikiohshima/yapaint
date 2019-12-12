@@ -1740,9 +1740,20 @@ class VideoInterface {
       this.isBlocked = false;
     } catch (err) {
       console.warn("video play blocked");
+      this.retryPlay();
       this.isBlocked = this.isPlaying; // just in case isPlaying was set false while we were trying
     }
     return !this.isBlocked;
+  }
+
+  async retryPlay() {
+    this.video.muted = true;
+    try {
+      await this.vieo.play();
+      this.isBlocked = false;
+    } catch (err) {
+      console.warn("video play blocked");
+    }
   }
 
   pause(videoTime) {
