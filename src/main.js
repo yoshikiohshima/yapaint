@@ -12,6 +12,7 @@ let isLocal = false;
 let session;
 let hadControl = false;
 let lastControl = false;
+let withoutVideo = true;
 
 let bitmaps = {};
 
@@ -1805,6 +1806,11 @@ async function start(file, name, master) {
       session.view.updateControl(true);
       session.view.control({allow: true});
     }
+    if (withoutVideo) {
+      session.view.hasControl = true;
+      session.view.updateControl(true);
+      session.view.control({allow: true});
+    }
   }
   return Promise.resolve(isLocal ? 'local' : 'remote');
 }
@@ -1839,7 +1845,7 @@ function drop(evt) {
   if (ind >= 0) {
     let item = evt.dataTransfer.items[0];
     let file = item.getAsFile();
-    
+    withoutVideo = false;
     editor(file, null, true);
   } else {
     console.log("unknown drop type");
@@ -1902,7 +1908,7 @@ function init() {
   landingPage.style.setProperty("display", "flex");
 
   let startButton = document.getElementById("startButton");
-  startButton.addEventListener("click", (evt) => editor(null));
+    startButton.addEventListener("click", (evt) => editor(null));
 
   initDrop.addEventListener("drop", (evt) => drop(evt));
   initDrop.addEventListener("dragover", (evt) => dragover(evt));
